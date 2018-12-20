@@ -1,5 +1,6 @@
 package ij.gui;
 import ij.*;
+import ij.process.*;
 import ij.measure.Calibration;
 import ij.plugin.frame.SyncWindows;
 import java.awt.*;
@@ -34,7 +35,7 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 		pack();
 		ic = imp.getCanvas();
 		if (ic!=null) ic.setMaxBounds();
-		show();
+		if (!Prefs.get("Astronomy_Tool.autoConvert", false)) show();
 		int previousSlice = imp.getCurrentSlice();
 		if (previousSlice>1 && previousSlice<=imp.getStackSize())
 			imp.setSlice(previousSlice);
@@ -137,6 +138,11 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 
 	
 	void updatePosition() {
+        if (imp.getType()==ImagePlus.COLOR_RGB)
+            {
+            ImageProcessor ip = imp.getProcessor();
+            ip.reset();
+            }
 		slice = (t-1)*nChannels*nSlices + (z-1)*nChannels + c;
 		imp.updatePosition(c, z, t);
 	}

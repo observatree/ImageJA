@@ -113,6 +113,7 @@ public class Converter implements PlugIn {
 		if (roi!=null)
 			imp.setRoi(roi);
 		IJ.showTime(imp, start, "");
+        imp.setProcessor(imp.getProcessor());
 		imp.repaintWindow();
 		Menus.updateMenus();
 	}

@@ -75,7 +75,7 @@ public class TextWindow extends Frame implements ActionListener, FocusListener, 
 		
 		Point loc=null;
 		int w=0, h=0;
-		if (title.equals("Results")) {
+		if (title.contains("Results") || title.contains("Measure")) {
 			loc = Prefs.getLocation(LOC_KEY);
 			w = (int)Prefs.get(WIDTH_KEY, 0.0);
 			h = (int)Prefs.get(HEIGHT_KEY, 0.0);
@@ -125,7 +125,7 @@ public class TextWindow extends Frame implements ActionListener, FocusListener, 
 			mb.setFont(Menus.getFont());
 		Menu m = new Menu("File");
 		m.add(new MenuItem("Save As...", new MenuShortcut(KeyEvent.VK_S)));
-		if (getTitle().equals("Results")) {
+		if (getTitle().contains("Results") || getTitle().contains("Measure")) {
 			m.add(new MenuItem("Rename..."));
 			m.add(new MenuItem("Duplicate..."));
 		}
@@ -148,12 +148,12 @@ public class TextWindow extends Frame implements ActionListener, FocusListener, 
 		m.add(new MenuItem("Save Settings"));
 		m.addActionListener(this);
 		mb.add(m);
-		if (getTitle().equals("Results")) {
-			m = new Menu("Results");
-			m.add(new MenuItem("Clear Results"));
-			m.add(new MenuItem("Summarize"));
-			m.add(new MenuItem("Distribution..."));
-			m.add(new MenuItem("Set Measurements..."));
+		if (getTitle().contains("Results") || getTitle().contains("Measure")) {
+			if (getTitle().contains("Measure")) m = new Menu("Options"); else m = new Menu("Results");
+			if (getTitle().contains("Results")) m.add(new MenuItem("Clear Results"));
+			if (getTitle().contains("Results")) m.add(new MenuItem("Summarize"));
+			if (getTitle().contains("Results")) m.add(new MenuItem("Distribution..."));
+			if (getTitle().contains("Results")) m.add(new MenuItem("Set Measurements..."));
 			m.add(new MenuItem("Options..."));
 			m.addActionListener(this);
 			mb.add(m);
@@ -245,7 +245,7 @@ public class TextWindow extends Frame implements ActionListener, FocusListener, 
 	/** Closes this TextWindow. Display a "save changes" dialog
 		if this is the "Results" window and 'showDialog' is true. */
 	public void close(boolean showDialog) {
-		if (getTitle().equals("Results")) {
+		if (getTitle().contains("Results") || getTitle().contains("Measure")) {
 			if (showDialog && !Analyzer.resetCounter())
 				return;
 			IJ.setTextPanel(null);

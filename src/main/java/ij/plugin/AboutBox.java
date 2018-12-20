@@ -7,14 +7,14 @@ import ij.io.*;
 import java.net.URL;
 import java.awt.image.*;
 
-/** This plugin implements the Help/About ImageJ command by opening
+/** This plugin implements the Help/About AstroImageJ command by opening
 	the about.jpg in ij.jar, scaling it 400% and adding some text. */
 	public class AboutBox implements PlugIn {
 		static final int SMALL_FONT=14, LARGE_FONT=30;
 
 	public void run(String arg) {
 		System.gc();
-		int lines = 7;
+		int lines = 10;
 		String[] text = new String[lines];
 		text[0] = "ImageJ "+ImageJ.VERSION+ImageJ.BUILD;
 		text[1] = "Wayne Rasband";
@@ -22,7 +22,10 @@ import java.awt.image.*;
 		text[3] = IJ.URL;
 		text[4] = "Java "+System.getProperty("java.version")+(IJ.is64Bit()?" (64-bit)":" (32-bit)");
 		text[5] = IJ.freeMemory();
-		text[6] = "ImageJ is in the public domain";
+		text[6] = "AstroImageJ is in the public domain";
+        text[7] = "AstroImageJ "+IJ.getAstroVersion();
+        text[8] = "Karen Collins, John Kielkopf";
+        text[9] = "University of Louisville";
 		ImageProcessor ip = null;
 		ImageJ ij = IJ.getInstance();
 		URL url = ij .getClass() .getResource("/about.jpg");
@@ -41,7 +44,7 @@ import java.awt.image.*;
 		ip.setFont(new Font("SansSerif", Font.PLAIN, LARGE_FONT));
 		ip.setAntialiasedText(true);
 		int[] widths = new int[lines];
-		widths[0] = ip.getStringWidth(text[0]);
+		widths[0] = ip.getStringWidth(text[9]);
 		ip.setFont(new Font("SansSerif", Font.PLAIN, SMALL_FONT));
 		for (int i=1; i<lines-1; i++)
 			widths[i] = ip.getStringWidth(text[i]);
@@ -51,7 +54,15 @@ import java.awt.image.*;
 				max = widths[i];
 		ip.setColor(new Color(255,255, 140));
 		ip.setFont(new Font("SansSerif", Font.PLAIN, LARGE_FONT));
-		int y  = 45;
+		int y  = 40;
+        ip.drawString(text[7], x(text[7],ip,max), y);
+        y += 30;
+        ip.setFont(new Font("SansSerif", Font.PLAIN, SMALL_FONT));
+        ip.drawString(text[8], x(text[8],ip,max), y);
+        y += 18;
+        ip.drawString(text[9], x(text[9],ip,max), y);
+        y += 50;
+        ip.setFont(new Font("SansSerif", Font.PLAIN, LARGE_FONT));
 		ip.drawString(text[0], x(text[0],ip,max), y);
 		ip.setFont(new Font("SansSerif", Font.PLAIN, SMALL_FONT));
 		y += 30;
@@ -68,7 +79,7 @@ import java.awt.image.*;
 		}
 		ip.drawString(text[6], ip.getWidth()-ip.getStringWidth(text[6])-10, ip.getHeight()-3);
 		ImageWindow.centerNextImage();
-		new ImagePlus("About ImageJ", ip).show();
+		new ImagePlus("About AstroImageJ", ip).show();
 	}
 
 	int x(String text, ImageProcessor ip, int max) {

@@ -25,7 +25,7 @@ loaded from the "IJ_Props.txt" and "IJ_Prefs.txt" files.
 public class Prefs {
 
 	public static final String PROPS_NAME = "IJ_Props.txt";
-	public static final String PREFS_NAME = "IJ_Prefs.txt";
+	public static final String PREFS_NAME = "AIJ_Prefs.txt";
 	public static final String DIR_IMAGE = "dir.image";
 	public static final String FCOLOR = "fcolor";
 	public static final String BCOLOR = "bcolor";
@@ -93,7 +93,7 @@ public class Prefs {
 	/** Disable Edit/Undo command. */
 	public static boolean disableUndo;
 	/** Do not draw black border around image. */
-	public static boolean noBorder;
+	public static boolean noBorder = true;
 	/** Only show ROIs associated with current slice in Roi Manager "Show All" mode. */
 	public static boolean showAllSliceOnly;
 	/** Include column headers when copying tables to clipboard. */
@@ -141,7 +141,7 @@ public class Prefs {
 	/** Adjust contrast when scrolling stacks (or hold shift key down) */
 	public static boolean autoContrast;
 
-	static Properties ijPrefs = new Properties();
+	public static Properties ijPrefs = new Properties();
 	static Properties props = new Properties(ijPrefs);
 	static String prefsDir;
 	static String imagesURL;
@@ -165,7 +165,7 @@ public class Prefs {
 		if (IJ.isMacOSX())
 			prefsDir += "/Library/Preferences";
 		else
-			prefsDir += File.separator+".imagej";
+			prefsDir += File.separator+".astroimagej";
 		if (f==null) {
 			try {f = new FileInputStream(homeDir+"/"+PROPS_NAME);}
 			catch (FileNotFoundException e) {f=null;}
@@ -328,7 +328,7 @@ public class Prefs {
 
 	}
 
-	static boolean loadPrefs(String path) {
+	public static boolean loadPrefs(String path) {
 		try {
 			InputStream is = new BufferedInputStream(new FileInputStream(path));
 			ijPrefs.load(is);
@@ -367,7 +367,7 @@ public class Prefs {
 			PlotWindow.savePreferences(prefs);
 			NewImage.savePreferences(prefs);
 			path = prefsDir+separator+PREFS_NAME;
-			if (prefsDir.endsWith(".imagej")) {
+			if (prefsDir.endsWith(".astroimagej")) {
 				File f = new File(prefsDir);
 				if (!f.exists()) f.mkdir(); // create .imagej directory
 			}
@@ -548,11 +548,25 @@ public class Prefs {
 		double yloc = Tools.parseDouble(value.substring(index+1));
 		if (Double.isNaN(yloc)) return null;
 		Point p = new Point((int)xloc, (int)yloc);
-		Dimension screen = IJ.getScreenSize();
-		if (p.x>screen.width-100 || p.y>screen.height-40)
+		//Dimension screen = IJ.getScreenSize();
+		if (!isLocationOnScreen(p))
 			return null;
 		else
 			return p;
+    }
+ 
+     public static boolean isLocationOnScreen(Point loc) {
+        GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
+        GraphicsDevice[] gds = ge.getScreenDevices();
+        Rectangle bounds = new Rectangle();
+        for (int j = 0; j < gds.length; j++) {
+          GraphicsDevice gd = gds[j];
+          bounds.setRect(gd.getDefaultConfiguration().getBounds());
+          if (bounds.contains(loc.x, loc.y)) {
+            return true;
+          }
+        }
+        return false;
 	}
 
 	/** Save plugin preferences. */
@@ -568,7 +582,7 @@ public class Prefs {
 	public static void savePrefs(Properties prefs, String path) throws IOException{
 		FileOutputStream fos = new FileOutputStream(path);
 		BufferedOutputStream bos = new BufferedOutputStream(fos);
-		prefs.store(bos, "ImageJ "+ImageJ.VERSION+" Preferences");
+		prefs.store(bos, "AstroImageJ "+ImageJ.ASTROVERSION+"(with ImageJ "+ImageJ.VERSION+") Preferences");
 		bos.close();
 	}
 	

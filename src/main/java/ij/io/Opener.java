@@ -180,7 +180,7 @@ public class Opener {
 					IJ.runPlugIn("ObjectJ_", path);
 					break;
 				case TABLE:  // ImageJ Results table
-					openResultsTable(path);
+					IJ.runPlugIn("Read_MeasurementTable",path);
 					break;
 				case UNKNOWN:
 					String msg =
@@ -1037,7 +1037,7 @@ public class Opener {
 			return ZIP;
 
 		// FITS ("SIMP")
-		if ((b0==83 && b1==73 && b2==77 && b3==80) || name.endsWith(".fts.gz") || name.endsWith(".fits.gz"))
+		if ((b0==83 && b1==73 && b2==77 && b3==80) || name.endsWith(".fts.gz") || name.endsWith(".fits.gz") || name.endsWith(".fit.gz"))
 			return FITS;
 			
 		// Java source file, text file or macro
@@ -1053,7 +1053,7 @@ public class Opener {
 			return OJJ;
 
 		// Results table (tab-delimited or comma-separated tabular text)
-		if (name.endsWith(".xls") || name.endsWith(".csv")) 
+		if (name.endsWith(".xls") || name.endsWith(".csv") || name.endsWith(".dat") || name.endsWith(".tbl") || name.endsWith(".prn") || name.endsWith(".spc")) 
 			return TABLE;
 
 		// AVI

@@ -187,7 +187,7 @@ public class PlotWindow extends ImageWindow implements ActionListener, Clipboard
 		save = new Button("Save...");
 		save.addActionListener(this);
 		buttons.add(save);
-		copy = new Button("Copy...");
+		copy = new Button(getTitle().startsWith("Seeing Profile")?"Save Aperture":"Copy...");
 		copy.addActionListener(this);
 		buttons.add(copy);
 		if (plot!=null && plot.getSourceImageID()!=0) {
@@ -414,7 +414,19 @@ public class PlotWindow extends ImageWindow implements ActionListener, Clipboard
 		else if (b==list)
 			showList();
 		else if (b==save)
-			saveAsText();
+			{
+            String fileName = getTitle().replace("Plot of ","").replace("Measurements in ", "");
+            SaveDialog sf = new SaveDialog("Save plot as PNG",fileName, ".png");
+            if (sf.getDirectory() == null || sf.getFileName() == null) return;
+            IJ.runPlugIn(imp, "ij.plugin.PNG_Writer", sf.getDirectory()+sf.getFileName());
+            }
+        else if (getTitle().startsWith("Seeing Profile"))
+            {
+            Prefs.set("aperture.radius",Prefs.get("seeingprofile.radius", 20));
+            Prefs.set("aperture.rback1",Prefs.get("seeingprofile.rback1", 30));
+            Prefs.set("aperture.rback2",Prefs.get("seeingprofile.rback2", 40));
+            Prefs.set("setaperture.aperturechanged",true);
+            }
 		else
 			copyToClipboard();
 	}

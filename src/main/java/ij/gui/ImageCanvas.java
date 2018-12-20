@@ -42,7 +42,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	private Font font;
 	private Rectangle[] labelRects;
     private boolean maxBoundsReset;
-    private Overlay overlay, showAllOverlay;
+    protected Overlay overlay, showAllOverlay;
     private static final int LIST_OFFSET = 100000;
     private static Color showAllColor = Prefs.getColor(Prefs.SHOW_ALL_COLOR, new Color(0, 255, 255));
     private Color defaultColor = showAllColor;
@@ -62,11 +62,14 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	protected int xSrcStart;
 	protected int ySrcStart;
 	protected int flags;
+ 
+    public int xClicked = 0;
+    public int yClicked = 0;
 	
-	private Image offScreenImage;
-	private int offScreenWidth = 0;
-	private int offScreenHeight = 0;
-	private boolean mouseExited = true;
+	protected Image offScreenImage;
+	protected int offScreenWidth = 0;
+	protected int offScreenHeight = 0;
+	protected boolean mouseExited = true;
 	private boolean customRoi;
 	private boolean drawNames;
 	
@@ -180,7 +183,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		}
 	}
 
-    private void drawRoi(Roi roi, Graphics g) {
+    protected void drawRoi(Roi roi, Graphics g) {
 		if (roi==currentRoi) {
 			Color lineColor = roi.getStrokeColor();
 			Color fillColor = roi.getFillColor();
@@ -212,7 +215,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		return slice;
 	}
 
-	private void drawOverlay(Overlay overlay, Graphics g) {
+	public void drawOverlay(Overlay overlay, Graphics g) {
 		if (imp!=null && imp.getHideOverlay() && overlay!=showAllOverlay)
 			return;
 		if (imp!=null && showAllOverlay!=null && overlay!=showAllOverlay)
@@ -272,7 +275,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		font = null;
 	}
     	
-	void drawOverlay(Graphics g) {
+	public void drawOverlay(Graphics g) {
 		drawOverlay(overlay, g);
 	}
 
@@ -364,7 +367,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		g.setColor(defaultColor);
 	} 
 
-	void drawZoomIndicator(Graphics g) {
+	public void drawZoomIndicator(Graphics g) {
 		int x1 = 10;
 		int y1 = 10;
 		double aspectRatio = (double)imageHeight/imageWidth;
@@ -433,7 +436,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
     long firstFrame;
     int frames, fps;
         
-	void showFrameRate(Graphics g) {
+	protected void showFrameRate(Graphics g) {
 		frames++;
 		if (System.currentTimeMillis()>firstFrame+1000) {
 			firstFrame=System.currentTimeMillis();
@@ -456,7 +459,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
     public Graphics getGraphics() {
      	Graphics g = super.getGraphics();
 		IJ.write("getGraphics: "+count++);
-		if (IJ.altKeyDown())
+		if (IJ.altKeyDown() && !imp.getTitle().startsWith("Seeing Profile"))
 			throw new IllegalArgumentException("");
     	return g;
     }
@@ -607,7 +610,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 				resetMaxBounds(); // Works around problem that prevented window from being larger than maximized size
 			resetMaxBoundsCount++;
 		}
-		if (IJ.altKeyDown())
+		if (IJ.altKeyDown() && !imp.getTitle().startsWith("Seeing Profile"))
 			{fitToWindow(); return;}
 		if (srcRect.width<imageWidth || srcRect.height<imageHeight) {
 			if (width>imageWidth*magnification)
@@ -1376,6 +1379,8 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	}
 
 	public void mouseReleased(MouseEvent e) {
+        xClicked = e.getX();
+        yClicked = e.getY();
 		int ox = offScreenX(e.getX());
 		int oy = offScreenY(e.getY());
 		if ((overlay!=null||showAllOverlay!=null) && ox==mousePressedX && oy==mousePressedY

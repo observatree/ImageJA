@@ -1191,7 +1191,7 @@ public class Roi extends Object implements Cloneable, java.io.Serializable {
 		imp.draw(clipX, clipY, clipWidth, clipHeight);
 	}
 	
-	void updatePaste() {
+	public void updatePaste() {
 		if (clipboard!=null) {
 			imp.getMask();
 			ImageProcessor ip = imp.getProcessor();

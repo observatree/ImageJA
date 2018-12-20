@@ -222,7 +222,7 @@ public class SaveDialog {
 	private boolean noExtension(String name) {
 		if (name==null) return false;
 		int dotIndex = name.indexOf(".");
-		return dotIndex==-1 || (name.length()-dotIndex)>5;
+		return dotIndex==-1 || (name.length()-dotIndex)>10;
 	}
 	
 	/** Returns the selected directory. */

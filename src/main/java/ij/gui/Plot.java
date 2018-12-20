@@ -56,13 +56,13 @@ public class Plot {
 	/** the margin width right of the plot frame */
 	public static final int RIGHT_MARGIN = 18;
 	/** the margin width above the plot frame */
-	public static final int TOP_MARGIN = 15;
+	public static final int TOP_MARGIN = 50;
 	/** the margin width below the plot frame */
 	public static final int BOTTOM_MARGIN = 40;
 
 	private static final int WIDTH = 450;
 	private static final int HEIGHT = 200;
-	private static final int MAX_INTERVALS = 12;	//maximum number of intervals between ticks or grid lines
+	private static final int MAX_INTERVALS = 50;	//maximum number of intervals between ticks or grid lines
 	private static final int MIN_X_GRIDWIDTH = 60;	//minimum distance between grid lines or ticks along x
 	private static final int MIN_Y_GRIDWIDTH = 40;	//minimum distance between grid lines or ticks along y
 	private static final int TICK_LENGTH = 3;		//length of ticks
@@ -81,7 +81,7 @@ public class Plot {
 	private String xLabel;
 	private String yLabel;
 	private int flags;
-	private Font font = new Font("Helvetica", Font.PLAIN, 12);
+	private Font font = new Font("Dialog", Font.PLAIN, 12);
 	private boolean fixedYScale;
 	private int lineWidth = 1; // Line.getWidth();
 	private int markSize = 5;
@@ -293,6 +293,13 @@ public class Plot {
 		int xt = LEFT_MARGIN + (int)(x*frameWidth);
 		int yt = TOP_MARGIN + (int)(y*frameHeight);
 		ip.drawString(label, xt, yt);
+    }
+ 
+    public void addTitle(double x, double y, String label) {
+        setup();
+        int xt = LEFT_MARGIN + (int)(x*frameWidth);
+        int yt = font.getSize() + (int)(y*(frameHeight+TOP_MARGIN-font.getSize()));
+        ip.drawString(label, xt, yt);
 	}
 	
 		/* Draws text at the specified location, using the coordinate system defined
@@ -345,7 +352,9 @@ public class Plot {
 		int iy1 = TOP_MARGIN + frameHeight - (int)Math.round((y1-yMin)*yScale);
 		int ix2 = LEFT_MARGIN + (int)Math.round((x2-xMin)*xScale);
 		int iy2 = TOP_MARGIN + frameHeight - (int)Math.round((y2-yMin)*yScale);
-		ip.drawLine(ix1, iy1, ix2, iy2);
+		ip.setClipRect(frame);
+        ip.drawLine(ix1, iy1, ix2, iy2);
+        ip.setClipRect(null);
 	}
 
 	/** Sets the font. */
@@ -462,7 +471,7 @@ public class Plot {
 		}
 		int maxNumWidth = 0;
 		if ((flags&(Y_NUMBERS + Y_TICKS + Y_GRID)) != 0) {
-			double step = Math.abs(Math.max(frame.width/MAX_INTERVALS, MIN_Y_GRIDWIDTH)/yScale); //the smallest allowable increment
+			double step = Math.abs(Math.max(frame.height/MAX_INTERVALS, MIN_Y_GRIDWIDTH)/yScale); //the smallest allowable increment
 			step = niceNumber(step);
 			int i1, i2;
 			if ((flags&X_FORCE2GRID) != 0) {

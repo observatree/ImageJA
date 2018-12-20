@@ -235,7 +235,7 @@ public class ImageReader {
 					if (fi.fileType==FileInfo.GRAY32_FLOAT)
 						pixels[i] = Float.intBitsToFloat(tmp);
 					else if (fi.fileType==FileInfo.GRAY32_UNSIGNED)
-						pixels[i] = (float)(tmp&0xffffffffL);
+						pixels[i] = fi.fileFormat==FileInfo.FITS ? (float)(tmp^0x80000000) : (float)(tmp&0xffffffffL);
 					else
 						pixels[i] = tmp;
 					j += 4;
@@ -246,7 +246,7 @@ public class ImageReader {
 					if (fi.fileType==FileInfo.GRAY32_FLOAT)
 						pixels[i] = Float.intBitsToFloat(tmp);
 					else if (fi.fileType==FileInfo.GRAY32_UNSIGNED)
-						pixels[i] = (float)(tmp&0xffffffffL);
+						pixels[i] = fi.fileFormat==FileInfo.FITS ? (float)(tmp^0x80000000) : (float)(tmp&0xffffffffL);
 					else
 						pixels[i] = tmp;
 					j += 4;

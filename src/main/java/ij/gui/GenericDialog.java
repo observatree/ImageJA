@@ -76,6 +76,8 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
     private char echoChar;
     private boolean hideCancelButton;
     private boolean centerDialog = true;
+    private boolean positionDialog = false;
+    private int xPosition = 0, yPosition = 0;
     private String helpURL;
     private String yesLabel, noLabel;
 
@@ -83,7 +85,15 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
     	image window as the parent frame or the ImageJ frame if no image windows
     	are open. Dialog parameters are recorded by ImageJ's command recorder but
     	this requires that the first word of each label be unique. */
-	public GenericDialog(String title) {
+	public GenericDialog(String title, int x, int y) {
+        this(title, WindowManager.getCurrentImage()!=null?
+            (Frame)WindowManager.getCurrentImage().getWindow():IJ.getInstance()!=null?IJ.getInstance():new Frame());
+        positionDialog = true;
+        xPosition = x;
+        yPosition = y;
+    }
+ 
+    public GenericDialog(String title) {
 		this(title, WindowManager.getCurrentImage()!=null?
 			(Frame)WindowManager.getCurrentImage().getWindow():IJ.getInstance()!=null?IJ.getInstance():new Frame());
 	}
@@ -412,7 +422,7 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		c.gridx = 0; c.gridy = y;
 		c.gridwidth = 2;
 		c.anchor = GridBagConstraints.WEST;
-		c.insets = getInsets(10, 0, 0, 0);
+		c.insets = getInsets(0, 20, 0, 0);
 		grid.setConstraints(panel, c);
 		add(panel);
 		y++;
@@ -521,7 +531,7 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		int columns = 4;
 		int digits = 0;
 		double scale = 1.0;
-		if ((maxValue-minValue)<=5.0 && (minValue!=(int)minValue||maxValue!=(int)maxValue||defaultValue!=(int)defaultValue)) {
+		if ((maxValue-minValue)<=5.1 && ((minValue != 0.0 && minValue!=(int)minValue)||maxValue!=(int)maxValue||defaultValue!=(int)defaultValue)) {
 			scale = 20.0;
 			minValue *= scale;
 			maxValue *= scale;
@@ -1042,7 +1052,9 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 				setResizable(false);
 			pack();
 			setup();
-			if (centerDialog) GUI.center(this);
+			if (positionDialog)
+                setLocation(xPosition, yPosition);
+            else if (centerDialog) GUI.center(this);
 			setVisible(true);
 			recorderOn = Recorder.record;
 			IJ.wait(50); // work around for Sun/WinNT bug

@@ -62,6 +62,7 @@ public class TextPanel extends Panel implements AdjustmentListener,
 		setLayout(new BorderLayout());
 		add("Center",tc);
 		sbHoriz=new Scrollbar(Scrollbar.HORIZONTAL);
+        sbHoriz.setBlockIncrement(60);
 		sbHoriz.addAdjustmentListener(this);
 		sbHoriz.setFocusable(false); // prevents scroll bar from blinking on Windows
 		add("South", sbHoriz);
@@ -453,7 +454,7 @@ public class TextPanel extends Panel implements AdjustmentListener,
 		TextWindow tw = (TextWindow)comp;
 		if (title2==null) {
 			GenericDialog gd = new GenericDialog("Rename", tw);
-			gd.addStringField("Title:", "Results2", 20);
+			gd.addStringField("Title:", tw.getTitle().contains("Measure") ? tw.getTitle()+"_2" : "Results2", 40);
 			gd.showDialog();
 			if (gd.wasCanceled())
 				return;
@@ -487,9 +488,9 @@ public class TextPanel extends Panel implements AdjustmentListener,
 	void duplicate() {
 		if (rt==null) return;
 		ResultsTable rt2 = (ResultsTable)rt.clone();
-		String title2 = IJ.getString("Title:", "Results2");
+		String title2 = IJ.getString("Title:", ((TextWindow)(getParent())).getTitle()+"_2");
 		if (!title2.equals("")) {
-			if (title2.equals("Results")) title2 = "Results2";
+			if (title2.equals("Measurements")) title2 = "Measurements in Measurements2";
 			rt2.show(title2);
 		}
 	}
@@ -517,6 +518,7 @@ public class TextPanel extends Panel implements AdjustmentListener,
 		}
 		tc.repaint();
 		selLine=r;
+        IJ.runPlugIn("UpdateAstroWindows", "");
 	}
 
 	void extendSelection(int x,int y) {
@@ -537,6 +539,7 @@ public class TextPanel extends Panel implements AdjustmentListener,
 		}
 		tc.repaint();
 		selLine=r;
+        IJ.runPlugIn("UpdateAstroWindows", "");
 	}
 
     /** Converts a y coordinate in pixels into a row index. */
@@ -560,7 +563,7 @@ public class TextPanel extends Panel implements AdjustmentListener,
 		if (Prefs.copyColumnHeaders && labels!=null && !labels.equals("") && selStart==0 && selEnd==iRowCount-1) {
 			if (Prefs.noRowNumbers) {
 				String s = labels;
-				int index = s.indexOf("\t");
+				int index = s.indexOf("\t",s.indexOf("\t")+1);
 				if (index!=-1)
 					s = s.substring(index+1, s.length());
 				sb.append(s);
@@ -574,7 +577,7 @@ public class TextPanel extends Panel implements AdjustmentListener,
 			if (s.endsWith("\t"))
 				s = s.substring(0, s.length()-1);
 			if (Prefs.noRowNumbers && labels!=null && !labels.equals("")) {
-				int index = s.indexOf("\t");
+				int index = s.indexOf("\t",s.indexOf("\t")+1);
 				if (index!=-1)
 					s = s.substring(index+1, s.length());
 				sb.append(s);
@@ -741,7 +744,7 @@ public class TextPanel extends Panel implements AdjustmentListener,
 		if (rt!=null && rt.getCounter()!=0 && !summarized) {
 			if (path==null || path.equals("")) {
 				IJ.wait(10);
-				String name = isResults?"Results":title;
+				String name = isResults?"Results":title.replace("Measurements in ", "");
 				SaveDialog sd = new SaveDialog("Save Results", name, Prefs.get("options.ext", ".xls"));
 				String file = sd.getFileName();
 				if (file==null) return false;

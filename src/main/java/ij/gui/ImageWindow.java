@@ -21,13 +21,14 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 	protected ImagePlus imp;
 	protected ImageJ ij;
 	protected ImageCanvas ic;
+    public String extraInfo = "";
 	private double initialMagnification = 1;
 	private int newWidth, newHeight;
-	protected boolean closed;
+	protected boolean closed, hasMenus;
 	private boolean newCanvas;
-	private boolean unzoomWhenMinimizing = true;
+	protected boolean unzoomWhenMinimizing = true;
 	Rectangle maxWindowBounds; // largest possible window on this screen
-	Rectangle maxBounds; // Size of this window after it is maximized
+	protected Rectangle maxBounds; // Size of this window after it is maximized
 	long setMaxBoundsTime;
 
 	private static final int XINC = 8;
@@ -97,10 +98,13 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 			else
 				ic.update(previousWindow.getCanvas());
 			Point loc = previousWindow.getLocation();
-			setLocation(loc.x, loc.y);
+			if (this instanceof PlotWindow)
+                setLocation((int)Prefs.get("plot2.plotFrameLocationX", 10), (int)Prefs.get("plot2.plotFrameLocationY", 10));
+            else
+                setLocation(loc.x, loc.y);
 			if (!(this instanceof StackWindow)) {
 				pack();
-				show();
+				if (!Prefs.get("Astronomy_Tool.autoConvert", false) || (this instanceof PlotWindow) || (this instanceof HistogramWindow) || this.getTitle().startsWith("Profile of") || this.getTitle().startsWith("About")) show();
 			}
 			if (ic.getMagnification()!=0.0)
 				imp.setTitle(imp.getTitle());
@@ -121,7 +125,7 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 				if (img!=null) 
 					try {setIconImage(img);} catch (Exception e) {}
 			}
-			if (centerOnScreen) {
+			if (!(this instanceof PlotWindow) && centerOnScreen) {
 				GUI.center(this);
 				centerOnScreen = false;
 			} else if (nextLocation!=null) {
@@ -132,7 +136,7 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 				WindowManager.setTempCurrentImage(imp);
 				Interpreter.addBatchModeImage(imp);
 			} else
-				show();
+				if (!Prefs.get("Astronomy_Tool.autoConvert", false) || (this instanceof PlotWindow) || (this instanceof HistogramWindow) || this.getTitle().startsWith("Profile of") || this.getTitle().startsWith("About")) show();
 		}
      }
     
@@ -168,6 +172,8 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 		int sliderHeight = (this instanceof StackWindow)?20:0;
 		int screenHeight = maxWindow.y+maxWindow.height-sliderHeight;
 		double mag = 1;
+        if (!(this instanceof PlotWindow))
+        {
 		while (xbase+XINC*4+width*mag>maxWindow.x+maxWindow.width || ybase+height*mag>=screenHeight) {
 			//IJ.log(mag+"  "+xbase+"  "+width*mag+"  "+maxWindow.width);
 			double mag2 = ImageCanvas.getLowerZoomLevel(mag);
@@ -175,14 +181,17 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 			mag = mag2;
 		}
 		
-		if (mag<1.0) {
+		}
+        if (mag<1.0) {
 			initialMagnification = mag;
 			ic.setDrawingSize((int)(width*mag), (int)(height*mag));
 		}
 		ic.setMagnification(mag);
 		if (y+height*mag>screenHeight)
 			y = ybase;
-        if (!updating) setLocation(x, y);
+        if (this instanceof PlotWindow && !updating)
+            setLocation((int)Prefs.get("plot2.plotFrameLocationX", 10), (int)Prefs.get("plot2.plotFrameLocationY", 10));
+        else if (!updating) setLocation(x, y);
 		if (Prefs.open100Percent && ic.getMagnification()<1.0) {
 			while(ic.getMagnification()<1.0)
 				ic.zoomIn(0, 0);
@@ -192,7 +201,7 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 			pack();
 	}
 				
-	Rectangle getMaxWindow(int xloc, int yloc) {
+	protected Rectangle getMaxWindow(int xloc, int yloc) {
 		GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
 		Rectangle bounds = ge.getMaximumWindowBounds();
 		//bounds.x=960; bounds.y=0; bounds.width=960; bounds.height=1200;
@@ -328,7 +337,7 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 	   	else
     		{s2=IJ.d2s(size/1048576.0,1); s3="GB";}
     	if (s2.endsWith(".0")) s2 = s2.substring(0, s2.length()-2);
-     	return s+"; "+s2+s3;
+     	return s+"; "+s2+s3+extraInfo;
     }
 
     public void paint(Graphics g) {
@@ -338,12 +347,16 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 		int extraWidth = MIN_WIDTH - r.width;
 		int extraHeight = MIN_HEIGHT - r.height;
 		if (extraWidth<=0 && extraHeight<=0 && !Prefs.noBorder && !IJ.isLinux())
-			g.drawRect(r.x-1, r.y-1, r.width+1, r.height+1);
+			{}
     }
     
 	/** Removes this window from the window list and disposes of it.
 		Returns false if the user cancels the "save changes" dialog. */
 	public boolean close() {
+        if (this instanceof PlotWindow) {
+            Prefs.set("plot2.plotFrameLocationX",getX());
+            Prefs.set("plot2.plotFrameLocationY",getY());
+        }
 		boolean isRunning = running || running2;
 		running = running2 = false;
 		boolean virtual = imp.getStackSize()>1 && imp.getStack().isVirtual();
@@ -457,7 +470,7 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 		return new Rectangle(xloc, maxWindow.y, wWidth, wHeight);
 	}
 	
-	Dimension getExtraSize() {
+	protected Dimension getExtraSize() {
 		Insets insets = getInsets();
 		int extraWidth = insets.left+insets.right + 10;
 		int extraHeight = insets.top+insets.bottom + 10;
@@ -533,7 +546,7 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 		if (IJ.debugMode) IJ.log("windowActivated: "+imp.getTitle());
 		ImageJ ij = IJ.getInstance();
 		boolean quitting = ij!=null && ij.quitting();
-		if (IJ.isMacintosh() && ij!=null && !quitting) {
+		if (IJ.isMacintosh() && !hasMenus && ij!=null && !quitting) {
 			IJ.wait(10); // may be needed for Java 1.4 on OS X
 			setMenuBar(Menus.getMenuBar());
 		}
@@ -563,10 +576,10 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 		int oldState = e.getOldState();
 		int newState = e.getNewState();
 		//IJ.log("WSC: "+getBounds()+" "+oldState+" "+newState);
-		if ((oldState & Frame.MAXIMIZED_BOTH) == 0 && (newState & Frame.MAXIMIZED_BOTH) != 0)
+		//if ((oldState & Frame.MAXIMIZED_BOTH) == 0 && (newState & Frame.MAXIMIZED_BOTH) != 0)
 			maximize();
-		else if ((oldState & Frame.MAXIMIZED_BOTH) != 0 && (newState & Frame.MAXIMIZED_BOTH) == 0)
-			minimize();
+		//else if ((oldState & Frame.MAXIMIZED_BOTH) != 0 && (newState & Frame.MAXIMIZED_BOTH) == 0)
+			//minimize();
 	}
 
 	public void windowClosed(WindowEvent e) {}

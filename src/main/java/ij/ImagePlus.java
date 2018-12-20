@@ -524,7 +524,7 @@ public class ImagePlus implements ImageObserver, Measurements, Cloneable {
 	void setProcessor2(String title, ImageProcessor ip, ImageStack newStack) {
 		//IJ.log("setProcessor2: "+ip+" "+this.ip+" "+newStack);
 		if (title!=null) setTitle(title);
-		if (ip!=null & this.ip!=null && getWindow()!=null)
+		if (ip!=null && this.ip!=null && getWindow()!=null && !(getWindow() instanceof PlotWindow))
 			notifyListeners(UPDATED);
 		this.ip = ip;
 		if (ij!=null) ip.setProgressBar(ij.getProgressBar());
@@ -1331,6 +1331,8 @@ public class ImagePlus implements ImageObserver, Measurements, Cloneable {
 	 * @see #setT
 	 */
 	public synchronized void setSlice(int n) {
+        if (getType()==ImagePlus.COLOR_RGB)
+            ip.reset();
 		if (stack==null || (n==currentSlice&&ip!=null)) {
 			if (!noUpdateMode)
 				updateAndRepaintWindow();

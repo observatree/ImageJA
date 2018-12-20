@@ -1434,6 +1434,11 @@ public class IJ {
 		return ImageJ.VERSION;
 	}
 	
+	/** Returns the AstroImageJ version number as a string. */
+	public static String getAstroVersion() {
+		return ImageJ.ASTROVERSION;
+	}
+ 
 	/** Returns the ImageJ version and build number as a String, for 
 		example "1.46n05", or 1.46n99 if there is no build number. */
 	public static String getFullVersion() {

@@ -352,7 +352,7 @@ public class FolderOpener implements PlugIn {
 		gd.addStringField("or enter pattern:", "", 10);
 		gd.addCheckbox("Convert_to_RGB", convertToRGB);
 		gd.addCheckbox("Sort names numerically", sortFileNames);
-		gd.addCheckbox("Use virtual stack", openAsVirtualStack);
+		gd.addCheckbox("Use virtual stack", Prefs.get("folderopener.openAsVirtualStack", openAsVirtualStack));
 		gd.addMessage("10000 x 10000 x 1000 (100.3MB)");
 		gd.addHelp(IJ.URL+"/docs/menus/file.html#seq1");
 		gd.showDialog();
@@ -375,6 +375,7 @@ public class FolderOpener implements PlugIn {
 		convertToRGB = gd.getNextBoolean();
 		sortFileNames = gd.getNextBoolean();
 		openAsVirtualStack = gd.getNextBoolean();
+        Prefs.set("folderopener.openAsVirtualStack", openAsVirtualStack);
 		if (openAsVirtualStack)
 			scale = 100.0;
 		if (!IJ.macroRunning()) {
