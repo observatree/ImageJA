@@ -57,9 +57,10 @@ public class TiffDecoder {
 	static final int INFO = 0x696e666f;  // "info" (Info image property)
 	static final int LABELS = 0x6c61626c;  // "labl" (slice labels)
 	static final int RANGES = 0x72616e67;  // "rang" (display ranges)
-	static final int LUTS = 0x6c757473;  // "luts" (channel LUTs)
-	static final int ROI = 0x726f6920;  // "roi " (ROI)
-	static final int OVERLAY = 0x6f766572;  // "over" (overlay)
+	static final int LUTS = 0x6c757473;    // "luts" (channel LUTs)
+	static final int PLOT = 0x706c6f74;    // "plot" (serialized plot)
+	static final int ROI = 0x726f6920;     // "roi " (ROI)
+	static final int OVERLAY = 0x6f766572; // "over" (overlay)
 	
 	private String directory;
 	private String name;
@@ -94,6 +95,10 @@ public class TiffDecoder {
 			return ((b4 << 24) + (b3 << 16) + (b2 << 8) + (b1 << 0));
 		else
 			return ((b1 << 24) + (b2 << 16) + (b3 << 8) + b4);
+	}
+	
+	final long getUnsignedInt() throws IOException {
+		return (long)getInt()&0xffffffffL;
 	}
 
 	final int getShort() throws IOException {
@@ -168,7 +173,7 @@ public class TiffDecoder {
 			sum += fi.blues[i];
 			j += 2;
 		}
-		if (sum!=0)
+		if (sum!=0 && fi.fileType==FileInfo.GRAY8)
 			fi.fileType = FileInfo.COLOR8;
 	}
 	
@@ -190,12 +195,13 @@ public class TiffDecoder {
 		decode an IFD for each image. */
 	public void saveImageDescription(byte[] description, FileInfo fi) {
         String id = new String(description);
-        if (!id.startsWith("ImageJ"))
+        boolean createdByImageJ = id.startsWith("ImageJ");
+        if (!createdByImageJ)
 			saveMetadata(getName(IMAGE_DESCRIPTION), id);
 		if (id.length()<7) return;
 		fi.description = id;
         int index1 = id.indexOf("images=");
-        if (index1>0) {
+        if (index1>0 && createdByImageJ && id.charAt(7)!='\n') {
             int index2 = id.indexOf("\n", index1);
             if (index2>0) {
                 String images = id.substring(index1+7,index2);
@@ -279,12 +285,11 @@ public class TiffDecoder {
 			
 		in.seek(offset+260);
 		int nImages = in.readShort();
-		if(nImages>=2 && (fi.fileType==FileInfo.GRAY8||fi.fileType==FileInfo.COLOR8)) {
+		if (nImages>=2 && (fi.fileType==FileInfo.GRAY8||fi.fileType==FileInfo.COLOR8)) {
 			fi.nImages = nImages;
 			fi.pixelDepth = in.readFloat();	//SliceSpacing
 			int skip = in.readShort();		//CurrentSlice
 			fi.frameInterval = in.readFloat();
-			//ij.IJ.write("fi.pixelDepth: "+fi.pixelDepth);
 		}
 			
 		in.seek(offset+272);
@@ -341,13 +346,11 @@ public class TiffDecoder {
 	double getRational(long loc) throws IOException {
 		long saveLoc = in.getLongFilePointer();
 		in.seek(loc);
-		int numerator = getInt();
-		int denominator = getInt();
+		double numerator = getUnsignedInt();
+		double denominator = getUnsignedInt();
 		in.seek(saveLoc);
-		//System.out.println("numerator: "+numerator);
-		//System.out.println("denominator: "+denominator);
-		if (denominator!=0)
-			return (double)numerator/denominator;
+		if (denominator!=0.0)
+			return numerator/denominator;
 		else
 			return 0.0;
 	}
@@ -362,6 +365,7 @@ public class TiffDecoder {
 		if ((ifdCount%50)==0 && ifdCount>0)
 			ij.IJ.showStatus("Opening IFDs: "+ifdCount);
 		FileInfo fi = new FileInfo();
+		fi.fileType = FileInfo.BITMAP;  //BitsPerSample defaults to 1
 		for (int i=0; i<nEntries; i++) {
 			tag = getShort();
 			fieldType = getShort();
@@ -369,8 +373,6 @@ public class TiffDecoder {
 			value = getValue(fieldType, count);
 			long lvalue = ((long)value)&0xffffffffL;
 			if (debugMode && ifdCount<10) dumpTag(tag, count, value, fi);
-			//ij.IJ.write(i+"/"+nEntries+" "+tag + ", count=" + count + ", value=" + value);
-			//if (tag==0) return null;
 			switch (tag) {
 				case IMAGE_WIDTH: 
 					fi.width = value;
@@ -428,23 +430,31 @@ public class TiffDecoder {
 								fi.fileType = FileInfo.BITMAP;
 							else
 								error("Unsupported BitsPerSample: " + value);
-						} else if (count==3) {
+						} else if (count>1) {
 							long saveLoc = in.getLongFilePointer();
 							in.seek(lvalue);
 							int bitDepth = getShort();
-							if (!(bitDepth==8||bitDepth==16))
-								error("ImageJ can only open 8 and 16 bit/channel RGB images ("+bitDepth+")");
-							if (bitDepth==16)
-								fi.fileType = FileInfo.RGB48;
+							if (bitDepth==8)
+								fi.fileType = FileInfo.GRAY8;
+							else if (bitDepth==16)
+								fi.fileType = FileInfo.GRAY16_UNSIGNED;
+							else
+								error("ImageJ can only open 8 and 16 bit/channel images ("+bitDepth+")");
 							in.seek(saveLoc);
 						}
 						break;
 				case SAMPLES_PER_PIXEL:
 					fi.samplesPerPixel = value;
-					if (value==3 && fi.fileType!=FileInfo.RGB48)
-						fi.fileType = fi.fileType==FileInfo.GRAY16_UNSIGNED?FileInfo.RGB48:FileInfo.RGB;
-					else if (value==4 && fi.fileType==FileInfo.GRAY8) {
+					if (value==3 && fi.fileType==FileInfo.GRAY8)
+						fi.fileType = FileInfo.RGB;
+					else if (value==3 && fi.fileType==FileInfo.GRAY16_UNSIGNED)
+						fi.fileType = FileInfo.RGB48;
+					else if (value==4 && fi.fileType==FileInfo.GRAY8)
 						fi.fileType = photoInterp==5?FileInfo.CMYK:FileInfo.ARGB;
+					else if (value==4 && fi.fileType==FileInfo.GRAY16_UNSIGNED) {
+						fi.fileType = FileInfo.RGB48;
+						if (photoInterp==5)  //assume cmyk
+							fi.whiteIsZero = true;
 					}
 					break;
 				case ROWS_PER_STRIP:
@@ -472,20 +482,20 @@ public class TiffDecoder {
 					break;
 				case PLANAR_CONFIGURATION:  // 1=chunky, 2=planar
 					if (value==2 && fi.fileType==FileInfo.RGB48)
-							 fi.fileType = FileInfo.GRAY16_UNSIGNED;
+							 fi.fileType = FileInfo.RGB48_PLANAR;
 					else if (value==2 && fi.fileType==FileInfo.RGB)
 						fi.fileType = FileInfo.RGB_PLANAR;
-					else if (value==1 && fi.samplesPerPixel==4) {
-						fi.fileType = photoInterp==5?FileInfo.CMYK:FileInfo.ARGB;
-					} else if (value!=2 && !((fi.samplesPerPixel==1)||(fi.samplesPerPixel==3))) {
+					else if (value!=2 && !(fi.samplesPerPixel==1||fi.samplesPerPixel==3||fi.samplesPerPixel==4)) {
 						String msg = "Unsupported SamplesPerPixel: " + fi.samplesPerPixel;
 						error(msg);
 					}
 					break;
 				case COMPRESSION:
-					if (value==5)  // LZW compression
+					if (value==5)  {// LZW compression
 						fi.compression = FileInfo.LZW;
-					else if (value==32773)  // PackBits compression
+						if (fi.fileType==FileInfo.GRAY12_UNSIGNED)
+							error("ImageJ cannot open 12-bit LZW-compressed TIFFs");
+					} else if (value==32773)  // PackBits compression
 						fi.compression = FileInfo.PACK_BITS;
 					else if (value==32946 || value==8)
 						fi.compression = FileInfo.ZIP;
@@ -509,11 +519,11 @@ public class TiffDecoder {
 						fi.compression = FileInfo.LZW_WITH_DIFFERENCING;
 					break;
 				case COLOR_MAP: 
-					if (count==768 && fi.fileType==fi.GRAY8)
+					if (count==768)
 						getColorMap(lvalue, fi);
 					break;
 				case TILE_WIDTH:
-					error("ImageJ cannot open tiled TIFFs");
+					error("ImageJ cannot open tiled TIFFs.\nTry using the Bio-Formats plugin.");
 					break;
 				case SAMPLE_FORMAT:
 					if (fi.fileType==FileInfo.GRAY32_INT && value==FLOATING_POINT)
@@ -607,6 +617,7 @@ public class TiffDecoder {
 				if (types[i]==LABELS) id = " (slice labels)";
 				if (types[i]==RANGES) id = " (display ranges)";
 				if (types[i]==LUTS) id = " (luts)";
+				if (types[i]==PLOT) id = " (plot)";
 				if (types[i]==ROI) id = " (roi)";
 				if (types[i]==OVERLAY) id = " (overlay)";
 				dInfo += "   "+i+" "+Integer.toHexString(types[i])+" "+counts[i]+id+"\n";
@@ -625,6 +636,8 @@ public class TiffDecoder {
 				getDisplayRanges(start, fi);
 			else if (types[i]==LUTS)
 				getLuts(start, start+counts[i]-1, fi);
+			else if (types[i]==PLOT)
+				getPlot(start, fi);
 			else if (types[i]==ROI)
 				getRoi(start, fi);
 			else if (types[i]==OVERLAY)
@@ -710,6 +723,12 @@ public class TiffDecoder {
 		in.readFully(fi.roi, len); 
 	}
 
+	void getPlot(int first, FileInfo fi) throws IOException {
+		int len = metaDataCounts[first];
+		fi.plot = new byte[len];
+		in.readFully(fi.plot, len);
+	}
+
 	void getOverlay(int first, int last, FileInfo fi) throws IOException {
 		fi.overlay = new byte[last-first+1][];
 	    int index = 0;
@@ -742,11 +761,9 @@ public class TiffDecoder {
 		
 	public FileInfo[] getTiffInfo() throws IOException {
 		long ifdOffset;
-		Vector info;
-				
+		ArrayList list = new ArrayList();
 		if (in==null)
 			in = new RandomAccessStream(new RandomAccessFile(new File(directory, name), "r"));
-		info = new Vector();
 		ifdOffset = OpenImageFileHeader();
 		if (ifdOffset<0L) {
 			in.close();
@@ -757,38 +774,38 @@ public class TiffDecoder {
 			in.seek(ifdOffset);
 			FileInfo fi = OpenIFD();
 			if (fi!=null) {
-				info.addElement(fi);
+				list.add(fi);
 				ifdOffset = ((long)getInt())&0xffffffffL;
 			} else
 				ifdOffset = 0L;
 			if (debugMode && ifdCount<10) dInfo += "  nextIFD=" + ifdOffset + "\n";
-			if (fi!=null) {
-				if (fi.nImages>1) // ignore extra IFDs in ImageJ and NIH Image stacks
-					ifdOffset = 0L;
-			}
+			if (fi!=null && fi.nImages>1)
+				ifdOffset = 0L;   // ignore extra IFDs in ImageJ and NIH Image stacks
 		}
-		if (info.size()==0) {
+		if (list.size()==0) {
 			in.close();
 			return null;
 		} else {
-			FileInfo[] fi = new FileInfo[info.size()];
-			info.copyInto((Object[])fi);
-			if (debugMode) fi[0].debugInfo = dInfo;
+			FileInfo[] info = (FileInfo[])list.toArray(new FileInfo[list.size()]);
+			if (debugMode) info[0].debugInfo = dInfo;
 			if (url!=null) {
 				in.seek(0);
-				fi[0].inputStream = in;
+				info[0].inputStream = in;
 			} else
 				in.close();
-			if (fi[0].info==null)
-				fi[0].info = tiffMetadata;
+			if (info[0].info==null)
+				info[0].info = tiffMetadata;
+			FileInfo fi = info[0];
+			if (fi.fileType==FileInfo.GRAY16_UNSIGNED && fi.description==null)
+				fi.lutSize = 0; // ignore troublesome non-ImageJ 16-bit LUTs
 			if (debugMode) {
-				int n = fi.length;
-				fi[0].debugInfo += "number of images: "+ n + "\n";
-				fi[0].debugInfo += "offset to first image: "+fi[0].getOffset()+ "\n";
-				fi[0].debugInfo += "gap between images: "+getGapInfo(fi) + "\n";
-				fi[0].debugInfo += "little-endian byte order: "+fi[0].intelByteOrder + "\n";
+				int n = info.length;
+				fi.debugInfo += "number of IFDs: "+ n + "\n";
+				fi.debugInfo += "offset to first image: "+fi.getOffset()+ "\n";
+				fi.debugInfo += "gap between images: "+getGapInfo(info) + "\n";
+				fi.debugInfo += "little-endian byte order: "+fi.intelByteOrder + "\n";
 			}
-			return fi;
+			return info;
 		}
 	}
 	

@@ -8,13 +8,16 @@ import ij.measure.*;
 import ij.plugin.WandToolOptions;
 import ij.plugin.frame.Recorder;
 import ij.plugin.frame.RoiManager;
+import ij.plugin.filter.Analyzer;
 import ij.plugin.tool.PlugInTool;
 import ij.macro.*;
 import ij.*;
 import ij.util.*;
+import ij.text.*;
 import java.awt.event.*;
 import java.util.*;
 import java.awt.geom.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 
 /** This is a Canvas used to display images in a Window. */
@@ -26,7 +29,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	protected static Cursor crosshairCursor = new Cursor(Cursor.CROSSHAIR_CURSOR);
 
 	public static boolean usePointer = Prefs.usePointerCursor;
-	
+
 	protected ImagePlus imp;
 	protected boolean imageUpdated;
 	protected Rectangle srcRect;
@@ -52,7 +55,16 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
     private int mousePressedX, mousePressedY;
     private long mousePressedTime;
     private boolean overOverlayLabel;
-		
+
+    /** If the mouse moves less than this in screen pixels, successive zoom operations are on the same image pixel */
+	protected final static int MAX_MOUSEMOVE_ZOOM = 10;
+	/** Screen coordinates where the last zoom operation was done (initialized to impossible value) */
+	protected int lastZoomSX = -9999999;
+	protected int lastZoomSY = -9999999;
+	/** Image (=offscreen) coordinates where the cursor was moved to for zooming */
+	protected int zoomTargetOX = -1;
+	protected int zoomTargetOY;
+
 	protected ImageJ ij;
 	protected double magnification;
 	protected int dstWidth, dstHeight;
@@ -72,22 +84,28 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	protected boolean mouseExited = true;
 	private boolean customRoi;
 	private boolean drawNames;
-	
-	
+	private AtomicBoolean paintPending;
+	private boolean scaleToFit;
+	private boolean painted;
+	private boolean hideZoomIndicator;
+	private boolean flattening;
+		
 	public ImageCanvas(ImagePlus imp) {
 		this.imp = imp;
+		paintPending = new AtomicBoolean(false);
 		ij = IJ.getInstance();
 		int width = imp.getWidth();
 		int height = imp.getHeight();
 		imageWidth = width;
 		imageHeight = height;
 		srcRect = new Rectangle(0, 0, imageWidth, imageHeight);
-		setDrawingSize(imageWidth, (int)(imageHeight));
+		setSize(imageWidth, imageHeight);
 		magnification = 1.0;
  		addMouseListener(this);
  		addMouseMotionListener(this);
  		addKeyListener(ij);  // ImageJ handles keyboard shortcuts
-		setFocusTraversalKeysEnabled(false);
+ 		setFocusTraversalKeysEnabled(false);
+		//setScaleToFit(true);
 	}
 		
 	void updateImage(ImagePlus imp) {
@@ -97,7 +115,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		imageWidth = width;
 		imageHeight = height;
 		srcRect = new Rectangle(0, 0, imageWidth, imageHeight);
-		setDrawingSize(imageWidth, (int)imageHeight);
+		setSize(imageWidth, imageHeight);
 		magnification = 1.0;
 	}
 
@@ -109,31 +127,81 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			return;
 		srcRect = new Rectangle(ic.srcRect.x, ic.srcRect.y, ic.srcRect.width, ic.srcRect.height);
 		setMagnification(ic.magnification);
-		setDrawingSize(ic.dstWidth, ic.dstHeight);
+		setSize(ic.dstWidth, ic.dstHeight);
 	}
 
+	/** Sets the region of the image (in pixels) to be displayed. */
 	public void setSourceRect(Rectangle r) {
-		srcRect = r;
+		if (r==null)
+			return;
+		r = new Rectangle(r.x, r.y, r.width, r.height);
+		imageWidth = imp.getWidth();
+		imageHeight = imp.getHeight();
+		if (r.x<0) r.x = 0;
+		if (r.y<0) r.y = 0;
+		if (r.width<1)
+			r.width = 1;
+		if (r.height<1)
+			r.height = 1;
+		if (r.width>imageWidth)
+			r.width = imageWidth;
+		if (r.height>imageHeight)
+			r.height = imageHeight;
+		if (r.x+r.width>imageWidth)
+			r.x = imageWidth-r.width;
+		if (r.y+r.height>imageHeight)
+			r.y = imageHeight-r.height;
+		if (srcRect==null)
+			srcRect = r;
+		else {
+			srcRect.x = r.x;
+			srcRect.y = r.y;
+			srcRect.width = r.width;
+			srcRect.height = r.height;
+		}
+		if (dstWidth==0) {
+			Dimension size = getSize();
+			dstWidth = size.width;
+			dstHeight = size.height;
+		}
+		magnification = (double)dstWidth/srcRect.width;
+		imp.setTitle(imp.getTitle());
+		if (IJ.debugMode) IJ.log("setSourceRect: "+magnification+" "+(int)(srcRect.height*magnification+0.5)+" "+dstHeight+" "+srcRect);
 	}
 
 	void setSrcRect(Rectangle srcRect) {
-		this.srcRect = srcRect;
+		setSourceRect(srcRect);
 	}
 		
 	public Rectangle getSrcRect() {
 		return srcRect;
 	}
 	
+	/** Obsolete; replaced by setSize() */
 	public void setDrawingSize(int width, int height) {
-	    dstWidth = width;
-	    dstHeight = height;
+		dstWidth = width;
+		dstHeight = height;
 		setSize(dstWidth, dstHeight);
 	}
 		
+	public void setSize(int width, int height) {
+		super.setSize(width, height);
+		dstWidth = width;
+		dstHeight = height;
+	}
+
 	/** ImagePlus.updateAndDraw calls this method to force the paint()
 		method to update the image from the ImageProcessor. */
 	public void setImageUpdated() {
 		imageUpdated = true;
+	}
+
+	public void setPaintPending(boolean state) {
+		paintPending.set(state);
+	}
+	
+	public boolean getPaintPending() {
+		return paintPending.get();
 	}
 
 	public void update(Graphics g) {
@@ -141,11 +209,17 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	}
 
     public void paint(Graphics g) {
-		Roi roi = imp.getRoi();
-		if (roi!=null || overlay!=null || showAllOverlay!=null) {
-			if (roi!=null) roi.updatePaste();
-			if (!IJ.isMacOSX() && imageWidth!=0) {
+		if (IJ.debugMode) IJ.log("ImageCanvas.paint: "+imp);
+		painted = true;
+		Roi roi = imp.getRoi();		
+		if (roi!=null || overlay!=null || showAllOverlay!=null || Prefs.paintDoubleBuffered || (IJ.isLinux() && magnification<0.25)) {
+			// Use double buffering to avoid flickering of ROIs and to work around
+			// a Linux problem with large images not showing at low magnification.
+			if (roi!=null)
+				roi.updatePaste();
+			if (imageWidth!=0) {
 				paintDoubleBuffered(g);
+				setPaintPending(false);
 				return;
 			}
 		}
@@ -157,7 +231,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			setInterpolation(g, Prefs.interpolateScaledImages);
 			Image img = imp.getImage();
 			if (img!=null)
- 				g.drawImage(img, 0, 0, (int)(srcRect.width*magnification), (int)(srcRect.height*magnification),
+ 				g.drawImage(img, 0, 0, (int)(srcRect.width*magnification+0.5), (int)(srcRect.height*magnification+0.5),
 				srcRect.x, srcRect.y, srcRect.x+srcRect.width, srcRect.y+srcRect.height, null);
 			if (overlay!=null)
 				drawOverlay(overlay, g);
@@ -169,6 +243,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			if (IJ.debugMode) showFrameRate(g);
 		}
 		catch(OutOfMemoryError e) {IJ.outOfMemory("Paint");}
+		setPaintPending(false);
     }
     
 	private void setInterpolation(Graphics g, boolean interpolate) {
@@ -207,26 +282,28 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		if (label==null) return 0;
 		int slice = 0;
 		if (label.length()>=14 && label.charAt(4)=='-' && label.charAt(9)=='-')
-			slice = (int)Tools.parseDouble(label.substring(0,4),-1);
+			slice = (int)Tools.parseDouble(label.substring(0,4),0);
 		else if (label.length()>=17 && label.charAt(5)=='-' && label.charAt(11)=='-')
-			slice = (int)Tools.parseDouble(label.substring(0,5),-1);
+			slice = (int)Tools.parseDouble(label.substring(0,5),0);
 		else if (label.length()>=20 && label.charAt(6)=='-' && label.charAt(13)=='-')
-			slice = (int)Tools.parseDouble(label.substring(0,6),-1);
+			slice = (int)Tools.parseDouble(label.substring(0,6),0);
 		return slice;
 	}
 
 	public void drawOverlay(Overlay overlay, Graphics g) {
 		if (imp!=null && imp.getHideOverlay() && overlay!=showAllOverlay)
 			return;
+		flattening = imp!=null && ImagePlus.flattenTitle.equals(imp.getTitle());
 		if (imp!=null && showAllOverlay!=null && overlay!=showAllOverlay)
 			overlay.drawLabels(false);
 		Color labelColor = overlay.getLabelColor();
 		if (labelColor==null) labelColor = Color.white;
 		initGraphics(overlay, g, labelColor, Roi.getColor());
 		int n = overlay.size();
-		if (IJ.debugMode) IJ.log("paint: drawing "+n+" overlay ROIs");
+		if (IJ.debugMode) IJ.log("drawOverlay: "+n);
 		int currentImage = imp!=null?imp.getCurrentSlice():-1;
-		if (imp.getStackSize()==1)
+		int stackSize = imp.getStackSize();
+		if (stackSize==1)
 			currentImage = -1;
 		int channel=0, slice=0, frame=0;
 		boolean hyperstack = imp.isHyperStack();
@@ -235,18 +312,24 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			slice = imp.getSlice();
 			frame = imp.getFrame();
 		}
-		drawNames = overlay.getDrawNames();
+		drawNames = overlay.getDrawNames() && overlay.getDrawLabels();
 		boolean drawLabels = drawNames || overlay.getDrawLabels();
 		if (drawLabels)
 			labelRects = new Rectangle[n];
 		else
 			labelRects = null;
 		font = overlay.getLabelFont();
+		if (overlay.scalableLabels() && font!=null) {
+			double mag = getMagnification();
+			if (mag!=1.0)
+				font = font.deriveFont((float)(font.getSize()*mag));
+		}
 		Roi activeRoi = imp.getRoi();
 		boolean roiManagerShowAllMode = overlay==showAllOverlay && !Prefs.showAllSliceOnly;
 		for (int i=0; i<n; i++) {
 			if (overlay==null) break;
 			Roi roi = overlay.get(i);
+			if (roi==null) break;
 			if (hyperstack) {
 				int c = roi.getCPosition();
 				int z = roi.getZPosition();
@@ -262,9 +345,11 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 				if (((c==0||c==channel) && (z==0||z==slice) && (t==0||t==frame)) || roiManagerShowAllMode)
 					drawRoi(g, roi, drawLabels?i+LIST_OFFSET:-1);
 			} else {
-				int position = roi.getPosition();
-				if (position==0)
+				int position =  stackSize>1?roi.getPosition():0;
+				if (position==0 && stackSize>1)
 					position = getSliceNumber(roi.getName());
+				if (position>0 && imp.getCompositeMode()==IJ.COMPOSITE)
+					position = 0;
 				//IJ.log(position+"  "+currentImage+" "+roiManagerShowAllMode);
 				if (position==0 || position==currentImage || roiManagerShowAllMode)
 					drawRoi(g, roi, drawLabels?i+LIST_OFFSET:-1);
@@ -305,7 +390,6 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
     }
     
     void drawRoi(Graphics g, Roi roi, int index) {
-    	int type = roi.getType();
 		ImagePlus imp2 = roi.getImage();
 		roi.setImage(imp);
 		Color saveColor = roi.getStrokeColor();
@@ -332,13 +416,27 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
     }
     
 	void drawRoiLabel(Graphics g, int index, Roi roi) {
+		if (roi.isCursor())
+			return;
+		boolean pointRoi = roi instanceof PointRoi;
 		Rectangle r = roi.getBounds();
 		int x = screenX(r.x);
 		int y = screenY(r.y);
 		double mag = getMagnification();
 		int width = (int)(r.width*mag);
 		int height = (int)(r.height*mag);
-		int size = width>40 && height>40?12:9;
+		int size = width>40 || height>40?12:9;
+		int pointSize = 0;
+		int crossSize = 0;
+		if (pointRoi) {
+			pointSize = ((PointRoi)roi).getSize();
+			switch (pointSize) {
+				case 0: case 1: size=9; break;
+				case 2: case 3: size=10; break;
+				case 4: size=12; break;
+			}
+			crossSize = pointSize + 10 + 2*pointSize;
+		}
 		if (font!=null) {
 			g.setFont(font);
 			size = font.getSize();
@@ -349,25 +447,42 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		boolean drawingList = index >= LIST_OFFSET;
 		if (drawingList) index -= LIST_OFFSET;
 		String label = "" + (index+1);
-		if (drawNames && roi.getName()!=null)
+		if (drawNames)
 			label = roi.getName();
+		if (label==null)
+			return;
 		FontMetrics metrics = g.getFontMetrics();
 		int w = metrics.stringWidth(label);
 		x = x + width/2 - w/2;
 		y = y + height/2 + Math.max(size/2,6);
 		int h = metrics.getAscent() + metrics.getDescent();
+		int xoffset=0, yoffset=0;
+		if (pointRoi) {
+			xoffset = 6 + pointSize;
+			yoffset = h - 6 + pointSize;
+		}
 		if (bgColor!=null) {
 			g.setColor(bgColor);
-			g.fillRoundRect(x-1, y-h+2, w+1, h-3, 5, 5);
+			g.fillRoundRect(x-1+xoffset, y-h+2+yoffset, w+1, h-3, 5, 5);
 		}
-		if (labelRects!=null && index<labelRects.length)
-			labelRects[index] = new Rectangle(x-1, y-h+2, w+1, h);
+		if (labelRects!=null && index<labelRects.length) {
+			if (pointRoi) {
+				int x2 = screenX(r.x);
+				int y2 = screenY(r.y);
+				int crossSize2 = crossSize/2;
+				labelRects[index] = new Rectangle(x2-crossSize2, y2-crossSize2, crossSize, crossSize);
+			} else
+				labelRects[index] = new Rectangle(x-3, y-h+1, w+4, h);
+		}		
+		//IJ.log("drawRoiLabel: "+" "+label+" "+x+" "+y+" "+flattening);
 		g.setColor(labelColor);
-		g.drawString(label, x, y-2);
+		g.drawString(label, x+xoffset, y-2+yoffset);
 		g.setColor(defaultColor);
 	} 
 
 	public void drawZoomIndicator(Graphics g) {
+		if (hideZoomIndicator)
+			return;
 		int x1 = 10;
 		int y1 = 10;
 		double aspectRatio = (double)imageHeight/imageWidth;
@@ -397,8 +512,8 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	// Use double buffer to reduce flicker when drawing complex ROIs.
 	// Author: Erik Meijering
 	void paintDoubleBuffered(Graphics g) {
-		final int srcRectWidthMag = (int)(srcRect.width*magnification);
-		final int srcRectHeightMag = (int)(srcRect.height*magnification);
+		final int srcRectWidthMag = (int)(srcRect.width*magnification+0.5);
+		final int srcRectHeightMag = (int)(srcRect.height*magnification+0.5);
 		if (offScreenImage==null || offScreenWidth!=srcRectWidthMag || offScreenHeight!=srcRectHeightMag) {
 			offScreenImage = createImage(srcRectWidthMag, srcRectHeightMag);
 			offScreenWidth = srcRectWidthMag;
@@ -420,8 +535,9 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 				drawOverlay(overlay, offScreenGraphics);
 			if (showAllOverlay!=null)
 				drawOverlay(showAllOverlay, offScreenGraphics);
-			if (roi!=null) drawRoi(roi, offScreenGraphics);
-			if (srcRect.width<imageWidth ||srcRect.height<imageHeight)
+			if (roi!=null)
+				drawRoi(roi, offScreenGraphics);
+			if (srcRect.width<imageWidth || srcRect.height<imageHeight)
 				drawZoomIndicator(offScreenGraphics);
 			if (IJ.debugMode) showFrameRate(offScreenGraphics);
 			g.drawImage(offScreenImage, 0, 0, null);
@@ -452,18 +568,6 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
     public Dimension getPreferredSize() {
         return new Dimension(dstWidth, dstHeight);
     }
-
-    int count;
-    
-    /*
-    public Graphics getGraphics() {
-     	Graphics g = super.getGraphics();
-		IJ.write("getGraphics: "+count++);
-		if (IJ.altKeyDown() && !imp.getTitle().startsWith("Seeing Profile"))
-			throw new IllegalArgumentException("");
-    	return g;
-    }
-    */
 
 	/** Returns the current cursor location in image coordinates. */
 	public Point getCursorLoc() {
@@ -500,7 +604,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			return;
 		}
 		int id = Toolbar.getToolId();
-		switch (Toolbar.getToolId()) {
+		switch (id) {
 			case Toolbar.MAGNIFIER:
 				setCursor(moveCursor);
 				break;
@@ -510,14 +614,14 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			default:  //selection tool
 				PlugInTool tool = Toolbar.getPlugInTool();
 				boolean arrowTool = roi!=null && (roi instanceof Arrow) && tool!=null && "Arrow Tool".equals(tool.getToolName());
-				if ((id==Toolbar.SPARE1 || id>=Toolbar.SPARE2) && !arrowTool) {
+				if ((id>=Toolbar.CUSTOM1) && !arrowTool) {
 					if (Prefs.usePointerCursor)
 						setCursor(defaultCursor);
 					else
 						setCursor(crosshairCursor);
 				} else if (roi!=null && roi.getState()!=roi.CONSTRUCTING && roi.isHandle(sx, sy)>=0) {
 					setCursor(handCursor);
-				} else if ((overlay!=null||showAllOverlay!=null) && overOverlayLabel(sx,sy,ox,oy)) {
+				} else if ((overlay!=null||showAllOverlay!=null) && overOverlayLabel(sx,sy,ox,oy) && (roi==null||roi.getState()!=roi.CONSTRUCTING)) {
 					overOverlayLabel = true;
 					setCursor(handCursor);
 				} else if (Prefs.usePointerCursor || (roi!=null && roi.getState()!=roi.CONSTRUCTING && roi.contains(ox, oy)))
@@ -531,7 +635,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		Overlay o = showAllOverlay;
 		if (o==null)
 			o = overlay;
-		if (o==null || !o.getDrawLabels() || labelRects==null)
+		if (o==null || !o.isSelectable() || !o.getDrawLabels() || labelRects==null)
 			return false;
 		for (int i=o.size()-1; i>=0; i--) {
 			if (labelRects!=null&&labelRects[i]!=null&&labelRects[i].contains(sx,sy)) {
@@ -595,13 +699,15 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	}
 		
 	void setMagnification2(double magnification) {
-		if (magnification>32.0) magnification = 32.0;
-		if (magnification<0.03125) magnification = 0.03125;
+		if (magnification>32.0)
+			magnification = 32.0;
+		if (magnification<zoomLevels[0])
+			magnification = zoomLevels[0];
 		this.magnification = magnification;
 		imp.setTitle(imp.getTitle());
 	}
 
-	/** Enlarge the canvas if the user enlarges the window. */
+	/** Resizes the canvas when the user resizes the window. */
 	void resizeCanvas(int width, int height) {
 		ImageWindow win = imp.getWindow();
 		//IJ.log("resizeCanvas: "+srcRect+" "+imageWidth+"  "+imageHeight+" "+width+"  "+height+" "+dstWidth+"  "+dstHeight+" "+win.maxBounds);
@@ -610,14 +716,15 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 				resetMaxBounds(); // Works around problem that prevented window from being larger than maximized size
 			resetMaxBoundsCount++;
 		}
-		if (IJ.altKeyDown() && !imp.getTitle().startsWith("Seeing Profile"))
+		if (scaleToFit || IJ.altKeyDown() && !imp.getTitle().startsWith("Seeing Profile"))
 			{fitToWindow(); return;}
-		if (srcRect.width<imageWidth || srcRect.height<imageHeight) {
-			if (width>imageWidth*magnification)
-				width = (int)(imageWidth*magnification);
-			if (height>imageHeight*magnification)
-				height = (int)(imageHeight*magnification);
-			setDrawingSize(width, height);
+		if (width>imageWidth*magnification)
+			width = (int)(imageWidth*magnification);
+		if (height>imageHeight*magnification)
+			height = (int)(imageHeight*magnification);
+		Dimension size = getSize();
+		if (srcRect.width<imageWidth || srcRect.height<imageHeight || (painted&&(width!=size.width||height!=size.height))) {
+			setSize(width, height);
 			srcRect.width = (int)(dstWidth/magnification);
 			srcRect.height = (int)(dstHeight/magnification);
 			if ((srcRect.x+srcRect.width)>imageWidth)
@@ -634,15 +741,15 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		if (win==null) return;
 		Rectangle bounds = win.getBounds();
 		Insets insets = win.getInsets();
-		int sliderHeight = (win instanceof StackWindow)?20:0;
-		double xmag = (double)(bounds.width-10)/srcRect.width;
-		double ymag = (double)(bounds.height-(10+insets.top+sliderHeight))/srcRect.height;
+		int sliderHeight = win.getSliderHeight();
+		double xmag = (double)(bounds.width-(insets.left+insets.right+ImageWindow.HGAP*2))/srcRect.width;
+		double ymag = (double)(bounds.height-(ImageWindow.VGAP*2+insets.top+insets.bottom+sliderHeight))/srcRect.height;
 		setMagnification(Math.min(xmag, ymag));
 		int width=(int)(imageWidth*magnification);
 		int height=(int)(imageHeight*magnification);
 		if (width==dstWidth&&height==dstHeight) return;
 		srcRect=new Rectangle(0,0,imageWidth, imageHeight);
-		setDrawingSize(width, height);
+		setSize(width, height);
 		getParent().doLayout();
 	}
     
@@ -673,10 +780,10 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	public static double getLowerZoomLevel(double currentMag) {
 		double newMag = zoomLevels[0];
 		for (int i=0; i<zoomLevels.length; i++) {
-		if (zoomLevels[i] < currentMag)
-			newMag = zoomLevels[i];
-		else
-			break;
+			if (zoomLevels[i] < currentMag)
+				newMag = zoomLevels[i];
+			else
+				break;
 		}
 		return newMag;
 	}
@@ -692,38 +799,46 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		return newMag;
 	}
 
-	/** Zooms in by making the window bigger. If it can't
-		be made bigger, then make the source rectangle 
-		(srcRect) smaller and center it at (sx,sy). Note that
-		sx and sy are screen coordinates. */
+	/** Zooms in by making the window bigger. If it can't be made bigger, then makes 
+		the source rectangle (srcRect) smaller and centers it on the position in the
+		image where the cursor was when zooming has started.
+		Note that sx and sy are screen coordinates. */
 	public void zoomIn(int sx, int sy) {
 		if (magnification>=32) return;
+		scaleToFit = false;
+	    boolean mouseMoved = sqr(sx-lastZoomSX) + sqr(sy-lastZoomSY) > MAX_MOUSEMOVE_ZOOM*MAX_MOUSEMOVE_ZOOM;
+		lastZoomSX = sx;
+		lastZoomSY = sy;
+		if (mouseMoved || zoomTargetOX<0) {
+		    boolean cursorInside = sx >= 0 && sy >= 0 && sx < dstWidth && sy < dstHeight;
+		    zoomTargetOX = offScreenX(cursorInside ? sx : dstWidth/2); //where to zoom, offscreen (image) coordinates
+		    zoomTargetOY = offScreenY(cursorInside ? sy : dstHeight/2);
+		}
 		double newMag = getHigherZoomLevel(magnification);
 		int newWidth = (int)(imageWidth*newMag);
 		int newHeight = (int)(imageHeight*newMag);
 		Dimension newSize = canEnlarge(newWidth, newHeight);
 		if (newSize!=null) {
-			setDrawingSize(newSize.width, newSize.height);
+			setSize(newSize.width, newSize.height);
 			if (newSize.width!=newWidth || newSize.height!=newHeight)
-				adjustSourceRect(newMag, sx, sy);
+				adjustSourceRect(newMag, zoomTargetOX, zoomTargetOY);
 			else
 				setMagnification(newMag);
 			imp.getWindow().pack();
-		} else
-			adjustSourceRect(newMag, sx, sy);
+		} else // can't enlarge window
+			adjustSourceRect(newMag, zoomTargetOX, zoomTargetOY);
 		repaint();
 		if (srcRect.width<imageWidth || srcRect.height<imageHeight)
 			resetMaxBounds();
 	}
-	
+
+	/** Centers the viewable area on offscreen (image) coordinates x, y */
 	void adjustSourceRect(double newMag, int x, int y) {
 		//IJ.log("adjustSourceRect1: "+newMag+" "+dstWidth+"  "+dstHeight);
 		int w = (int)Math.round(dstWidth/newMag);
 		if (w*newMag<dstWidth) w++;
 		int h = (int)Math.round(dstHeight/newMag);
 		if (h*newMag<dstHeight) h++;
-		x = offScreenX(x);
-		y = offScreenY(y);
 		Rectangle r = new Rectangle(x-w/2, y-h/2, w, h);
 		if (r.x<0) r.x = 0;
 		if (r.y<0) r.y = 0;
@@ -733,21 +848,24 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		setMagnification(newMag);
 		//IJ.log("adjustSourceRect2: "+srcRect+" "+dstWidth+"  "+dstHeight);
 	}
-	
+
+    /** Returns the size to which the window can be enlarged, or null if it can't be enlarged.
+     *  <code>newWidth, newHeight</code> is the size needed for showing the full image
+     *  at the magnification needed */
 	protected Dimension canEnlarge(int newWidth, int newHeight) {
-		//if ((flags&Event.CTRL_MASK)!=0 || IJ.controlKeyDown()) return null;
+		if (IJ.altKeyDown())
+			return null;
 		ImageWindow win = imp.getWindow();
 		if (win==null) return null;
 		Rectangle r1 = win.getBounds();
 		Insets insets = win.getInsets();
 		Point loc = getLocation();
 		if (loc.x>insets.left+5 || loc.y>insets.top+5) {
-			r1.width = newWidth+insets.left+insets.right+10;
-			r1.height = newHeight+insets.top+insets.bottom+10;
-			if (win instanceof StackWindow) r1.height+=20;
+			r1.width = newWidth+insets.left+insets.right+ImageWindow.HGAP*2;
+			r1.height = newHeight+insets.top+insets.bottom+ImageWindow.VGAP*2+win.getSliderHeight();
 		} else {
-			r1.width = r1.width - dstWidth + newWidth+10;
-			r1.height = r1.height - dstHeight + newHeight+10;
+			r1.width = r1.width - dstWidth + newWidth;
+			r1.height = r1.height - dstHeight + newHeight;
 		}
 		Rectangle max = win.getMaxWindow(r1.x, r1.y);
 		boolean fitsHorizontally = r1.x+r1.width<max.x+max.width;
@@ -761,13 +879,22 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		else
 			return null;
 	}
-		
+
 	/**Zooms out by making the source rectangle (srcRect)  
 		larger and centering it on (x,y). If we can't make it larger,  
-		then make the window smaller.*/
-	public void zoomOut(int x, int y) {
-		if (magnification<=0.03125)
+		then make the window smaller. Note that
+		sx and sy are screen coordinates. */
+	public void zoomOut(int sx, int sy) {
+		if (magnification<=zoomLevels[0])
 			return;
+	    boolean mouseMoved = sqr(sx-lastZoomSX) + sqr(sy-lastZoomSY) > MAX_MOUSEMOVE_ZOOM*MAX_MOUSEMOVE_ZOOM;
+		lastZoomSX = sx;
+		lastZoomSY = sy;
+		if (mouseMoved || zoomTargetOX<0) {
+		    boolean cursorInside = sx >= 0 && sy >= 0 && sx < dstWidth && sy < dstHeight;
+		    zoomTargetOX = offScreenX(cursorInside ? sx : dstWidth/2); //where to zoom, offscreen (image) coordinates
+		    zoomTargetOY = offScreenY(cursorInside ? sy : dstHeight/2);
+		}
 		double oldMag = magnification;
 		double newMag = getLowerZoomLevel(magnification);
 		double srcRatio = (double)srcRect.width/srcRect.height;
@@ -777,22 +904,23 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			double scale = oldMag/newMag;
 			int newSrcWidth = (int)Math.round(srcRect.width*scale);
 			int newSrcHeight = (int)Math.round(srcRect.height*scale);
-			if (newSrcWidth>imageWidth) newSrcWidth=imageWidth;
+			if (newSrcWidth>imageWidth) newSrcWidth=imageWidth; 
 			if (newSrcHeight>imageHeight) newSrcHeight=imageHeight;
 			int newSrcX = srcRect.x - (newSrcWidth - srcRect.width)/2;
 			int newSrcY = srcRect.y - (newSrcHeight - srcRect.height)/2;
+			if (newSrcX + newSrcWidth > imageWidth) newSrcX = imageWidth - newSrcWidth;
+			if (newSrcY + newSrcHeight > imageHeight) newSrcY = imageHeight - newSrcHeight;
 			if (newSrcX<0) newSrcX = 0;
 			if (newSrcY<0) newSrcY = 0;
 			srcRect = new Rectangle(newSrcX, newSrcY, newSrcWidth, newSrcHeight);
-			//IJ.log(newMag+" "+srcRect+" "+dstWidth+" "+dstHeight);
+            //IJ.log(newMag+" "+srcRect+" "+dstWidth+" "+dstHeight);
 			int newDstWidth = (int)(srcRect.width*newMag);
 			int newDstHeight = (int)(srcRect.height*newMag);
 			setMagnification(newMag);
 			setMaxBounds();
-			//IJ.log(newDstWidth+" "+dstWidth+" "+newDstHeight+" "+dstHeight);
+            //IJ.log(newDstWidth+" "+dstWidth+" "+newDstHeight+" "+dstHeight);
 			if (newDstWidth<dstWidth || newDstHeight<dstHeight) {
-				//IJ.log("pack");
-				setDrawingSize(newDstWidth, newDstHeight);
+				setSize(newDstWidth, newDstHeight);
 				imp.getWindow().pack();
 			} else
 				repaint();
@@ -803,26 +931,26 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			if (w*newMag<dstWidth) w++;
 			int h = (int)Math.round(dstHeight/newMag);
 			if (h*newMag<dstHeight) h++;
-			x = offScreenX(x);
-			y = offScreenY(y);
-			Rectangle r = new Rectangle(x-w/2, y-h/2, w, h);
+			Rectangle r = new Rectangle(zoomTargetOX-w/2, zoomTargetOY-h/2, w, h);
 			if (r.x<0) r.x = 0;
 			if (r.y<0) r.y = 0;
 			if (r.x+w>imageWidth) r.x = imageWidth-w;
 			if (r.y+h>imageHeight) r.y = imageHeight-h;
 			srcRect = r;
+			setMagnification(newMag);
 		} else {
 			srcRect = new Rectangle(0, 0, imageWidth, imageHeight);
-			setDrawingSize((int)(imageWidth*newMag), (int)(imageHeight*newMag));
-			//setDrawingSize(dstWidth/2, dstHeight/2);
+			setSize((int)(imageWidth*newMag), (int)(imageHeight*newMag));
+			setMagnification(newMag);
 			imp.getWindow().pack();
 		}
-		//IJ.write(newMag + " " + srcRect.x+" "+srcRect.y+" "+srcRect.width+" "+srcRect.height+" "+dstWidth + " " + dstHeight);
-		setMagnification(newMag);
-		//IJ.write(srcRect.x + " " + srcRect.width + " " + dstWidth);
 		setMaxBounds();
 		repaint();
 	}
+
+    int sqr(int x) {
+        return x*x;
+    }
 
 	/** Implements the Image/Zoom/Original Scale command. */
 	public void unzoom() {
@@ -831,7 +959,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			return;
 		srcRect = new Rectangle(0, 0, imageWidth, imageHeight);
 		ImageWindow win = imp.getWindow();
-		setDrawingSize((int)(imageWidth*imag), (int)(imageHeight*imag));
+		setSize((int)(imageWidth*imag), (int)(imageHeight*imag));
 		setMagnification(imag);
         setMaxBounds();
 		win.pack();
@@ -886,7 +1014,6 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	
 	Color getColor(int index){
 		IndexColorModel cm = (IndexColorModel)imp.getProcessor().getColorModel();
-		//IJ.write(""+index+" "+(new Color(cm.getRGB(index))));
 		return new Color(cm.getRGB(index));
 	}
 	
@@ -949,7 +1076,6 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	}
 
 	public void mousePressed(MouseEvent e) {
-		//if (ij==null) return;
 		showCursorStatus = true;
 		int toolID = Toolbar.getToolId();
 		ImageWindow win = imp.getWindow();
@@ -960,12 +1086,10 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 				win.running2 = false;
 			return;
 		}
-		
+				
 		int x = e.getX();
 		int y = e.getY();
-		flags = e.getModifiers();
-		//IJ.log("Mouse pressed: " + e.isPopupTrigger() + "  " + ij.modifiers(flags));		
-		//if (toolID!=Toolbar.MAGNIFIER && e.isPopupTrigger()) {
+		flags = e.getModifiers();		
 		if (toolID!=Toolbar.MAGNIFIER && (e.isPopupTrigger()||(!IJ.isMacintosh()&&(flags&Event.META_MASK)!=0))) {
 			handlePopupMenu(e);
 			return;
@@ -980,12 +1104,11 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			return;
 		}
 		
-		if ((overlay!=null||showAllOverlay!=null) && ((e.isAltDown()&&!drawingTool())||e.isControlDown()||overOverlayLabel)) {
-			if (activateOverlayRoi(ox, oy)) {
-				mousePressedX = mousePressedY = 0;
+		if (overOverlayLabel && (overlay!=null||showAllOverlay!=null)) {
+			if (activateOverlayRoi(ox, oy))
 				return;
-			}
 		}
+		
 		mousePressedX = ox;
 		mousePressedY = oy;
 		mousePressedTime = System.currentTimeMillis();
@@ -998,17 +1121,23 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		if (customRoi && overlay!=null)
 			return;
 
+		if (toolID>=Toolbar.CUSTOM1) {
+			if (tool!=null && "Arrow Tool".equals(tool.getToolName()))
+				handleRoiMouseDown(e);
+			else
+				Toolbar.getInstance().runMacroTool(toolID);
+			return;
+		}
+
 		switch (toolID) {
 			case Toolbar.MAGNIFIER:
 				if (IJ.shiftKeyDown())
 					zoomToSelection(ox, oy);
 				else if ((flags & (Event.ALT_MASK|Event.META_MASK|Event.CTRL_MASK))!=0) {
-					//IJ.run("Out");
 					zoomOut(x, y);
 					if (getMagnification()<1.0)
 						imp.repaintWindow();
 				} else {
-					//IJ.run("In");
 	 				zoomIn(x, y);
 					if (getMagnification()<=1.0)
 						imp.repaintWindow();
@@ -1021,8 +1150,9 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 				setDrawingColor(ox, oy, IJ.altKeyDown());
 				break;
 			case Toolbar.WAND:
+				double tolerance = WandToolOptions.getTolerance();
 				Roi roi = imp.getRoi();
-				if (roi!=null && roi.contains(ox, oy)) {
+				if (roi!=null && (tolerance==0.0||imp.isThreshold()) && roi.contains(ox, oy)) {
 					Rectangle r = roi.getBounds();
 					if (r.width==imageWidth && r.height==imageHeight)
 						imp.deleteRoi();
@@ -1040,13 +1170,18 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 				}
 				setRoiModState(e, roi, -1);
 				String mode = WandToolOptions.getMode();
-				double tolerance = WandToolOptions.getTolerance();
+				if (Prefs.smoothWand)
+					mode = mode + " smooth";
 				int npoints = IJ.doWand(ox, oy, tolerance, mode);
 				if (Recorder.record && npoints>0) {
-					if (tolerance==0.0 && mode.equals("Legacy"))
-						Recorder.record("doWand", ox, oy);
-					else
-						Recorder.recordString("doWand("+ox+", "+oy+", "+tolerance+", \""+mode+"\");\n");
+					if (Recorder.scriptMode())
+						Recorder.recordCall("IJ.doWand(imp, "+ox+", "+oy+", "+tolerance+", \""+mode+"\");");
+					else {
+						if (tolerance==0.0 && mode.equals("Legacy"))
+							Recorder.record("doWand", ox, oy);
+						else
+							Recorder.recordString("doWand("+ox+", "+oy+", "+tolerance+", \""+mode+"\");\n");
+					}
 				}
 				break;
 			case Toolbar.OVAL:
@@ -1054,14 +1189,6 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 					new RoiBrush();
 				else
 					handleRoiMouseDown(e);
-				break;
-			case Toolbar.SPARE1: case Toolbar.SPARE2: case Toolbar.SPARE3: 
-			case Toolbar.SPARE4: case Toolbar.SPARE5: case Toolbar.SPARE6:
-			case Toolbar.SPARE7: case Toolbar.SPARE8: case Toolbar.SPARE9:
-				if (tool!=null && "Arrow Tool".equals(tool.getToolName()))
-					handleRoiMouseDown(e);
-				else
-					Toolbar.getInstance().runMacroTool(toolID);
 				break;
 			default:  //selection tool
 				handleRoiMouseDown(e);
@@ -1121,39 +1248,12 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			tool.mouseExited(imp, e);
 			if (e.isConsumed()) return;
 		}
-		//autoScroll(e);
 		ImageWindow win = imp.getWindow();
 		if (win!=null)
 			setCursor(defaultCursor);
 		IJ.showStatus("");
 		mouseExited = true;
 	}
-
-	/*
-	public void autoScroll(MouseEvent e) {
-		Roi roi = imp.getRoi();
-		if (roi==null || roi.getState()!=roi.CONSTRUCTING || srcRect.width>=imageWidth || srcRect.height>=imageHeight
-		|| !(roi.getType()==Roi.POLYGON || roi.getType()==Roi.POLYLINE || roi.getType()==Roi.ANGLE))
-			return;
-		int sx = e.getX();
-		int sy = e.getY();
-		xMouseStart = srcRect.x+srcRect.width/2;
-		yMouseStart = srcRect.y+srcRect.height/2;
-		Rectangle r = roi.getBounds();
-		Dimension size = getSize();
-		int deltax=0, deltay=0;
-		if (sx<0)
-			deltax = srcRect.width/4;
-		else if (sx>size.width)
-			deltax = -srcRect.width/4;
-		if (sy<0)
-			deltay = srcRect.height/4;
-		else if (sy>size.height)
-			deltay = -srcRect.height/4;
-		//IJ.log("autoscroll: "+sx+" "+sy+" "+deltax+" "+deltay+" "+r);
-		scroll(screenX(xMouseStart+deltax), screenY(yMouseStart+deltay));
-	}
-	*/
 
 	public void mouseDragged(MouseEvent e) {
 		int x = e.getX();
@@ -1185,14 +1285,42 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		int sy = e.getY();
 		int ox = offScreenX(sx);
 		int oy = offScreenY(sy);
-		Roi roi = imp.getRoi();
+		Roi roi = imp.getRoi();	
+		int tool = Toolbar.getToolId();	
+
 		int handle = roi!=null?roi.isHandle(sx, sy):-1;
 		boolean multiPointMode = roi!=null && (roi instanceof PointRoi) && handle==-1
-			&& Toolbar.getToolId()==Toolbar.POINT && Toolbar.getMultiPointMode();
+			&& tool==Toolbar.POINT && Toolbar.getMultiPointMode();
 		if (multiPointMode) {
-			imp.setRoi(((PointRoi)roi).addPoint(offScreenXD(sx), offScreenYD(sy)));
+			double oxd = offScreenXD(sx);
+			double oyd = offScreenYD(sy);
+			if (e.isShiftDown() && !IJ.isMacro()) {
+				FloatPolygon points = roi.getFloatPolygon();
+				if (points.npoints>0) {
+					double x0 = points.xpoints[0];
+					double y0 = points.ypoints[0];
+					double slope = Math.abs((oxd-x0)/(oyd-y0));
+					if (slope>=1.0)
+						oyd = points.ypoints[0];
+					else
+						oxd = points.xpoints[0];
+				}
+			}
+			((PointRoi)roi).addUserPoint(imp, oxd, oyd);
+			imp.setRoi(roi);
 			return;
 		}
+				
+		if (roi!=null && (roi instanceof PointRoi) && ((PointRoi)roi).promptBeforeDeleting()) {
+			int npoints = ((PolygonRoi)roi).getNCoordinates();
+			int counters = ((PointRoi)roi).getNCounters();
+			if (handle==-1 && !(tool==Toolbar.POINT && !Toolbar.getMultiPointMode()&&IJ.shiftKeyDown())) {
+				String msg = "Delete this multi-point selection ("+npoints+" points, "+counters+" counter"+(counters>1?"s":"")+")?";
+				if (!IJ.showMessageWithCancel("Delete Points?",msg+"\nRestore using Edit>Selection>Restore Selection."))
+					return;
+			}
+		}
+		
 		setRoiModState(e, roi, handle);
 		if (roi!=null) {
 			if (handle>=0) {
@@ -1218,7 +1346,6 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 			if ((type==Roi.POLYGON || type==Roi.POLYLINE || type==Roi.ANGLE)
 			&& roi.getState()==roi.CONSTRUCTING)
 				return;
-			int tool = Toolbar.getToolId();
 			if ((tool==Toolbar.POLYGON||tool==Toolbar.POLYLINE||tool==Toolbar.ANGLE)&& !(IJ.shiftKeyDown()||IJ.altKeyDown())) {
 				imp.deleteRoi();
 				return;
@@ -1383,10 +1510,18 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
         yClicked = e.getY();
 		int ox = offScreenX(e.getX());
 		int oy = offScreenY(e.getY());
-		if ((overlay!=null||showAllOverlay!=null) && ox==mousePressedX && oy==mousePressedY
-		&& (System.currentTimeMillis()-mousePressedTime)>250L && !drawingTool()) {
-			if (activateOverlayRoi(ox,oy))
-				return;
+		if ((overlay!=null||showAllOverlay!=null) && ox==mousePressedX && oy==mousePressedY) {
+			boolean cmdDown = IJ.isMacOSX() && e.isMetaDown();
+			Roi roi = imp.getRoi();
+			if (roi!=null && roi.getBounds().width==0)
+				roi=null;
+			if ((e.isAltDown()||e.isControlDown()||cmdDown) && roi==null) {
+				if (activateOverlayRoi(ox, oy))
+					return;
+			} else if ((System.currentTimeMillis()-mousePressedTime)>250L && !drawingTool()) {
+				if (activateOverlayRoi(ox,oy))
+					return;
+			}
 		}
 
 		PlugInTool tool = Toolbar.getPlugInTool();
@@ -1415,7 +1550,8 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 	
 	private boolean activateOverlayRoi(int ox, int oy) {
 		int currentImage = -1;
-		if (imp.getStackSize()>1)
+		int stackSize = imp.getStackSize();
+		if (stackSize>1)
 			currentImage = imp.getCurrentSlice();
 		int channel=0, slice=0, frame=0;
 		boolean hyperstack = imp.isHyperStack();
@@ -1427,8 +1563,9 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		Overlay o = showAllOverlay;
 		if (o==null)
 			o = overlay;
-		if (o==null)
+		if (o==null || !o.isSelectable())
 			return false;
+		boolean roiManagerShowAllMode = o==showAllOverlay && !Prefs.showAllSliceOnly;
 		boolean labels = o.getDrawLabels();
 		int sx = screenX(ox);
 		int sy = screenY(oy);
@@ -1440,17 +1577,23 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 					int c = roi.getCPosition();
 					int z = roi.getZPosition();
 					int t = roi.getTPosition();
-					if (!((c==0||c==channel) && (z==0||z==slice) && (t==0||t==frame)))
+					if (!((c==0||c==channel)&&(z==0||z==slice)&&(t==0||t==frame) || roiManagerShowAllMode))
 						continue;
 				} else {
-					int position = roi.getPosition();
-					if (!(position==0||position==currentImage))
+					int position = stackSize>1?roi.getPosition():0;
+					if (!(position==0||position==currentImage||roiManagerShowAllMode))
 						continue;
 				}
+				if (!IJ.altKeyDown() && roi.getType()==Roi.COMPOSITE
+				&& roi.getBounds().width==imp.getWidth() && roi.getBounds().height==imp.getHeight())
+					return false;
+				if (Toolbar.getToolId()==Toolbar.OVAL && Toolbar.getBrushSize()>0)
+					Toolbar.getInstance().setTool(Toolbar.RECTANGLE);
 				roi.setImage(null);
 				imp.setRoi(roi);
 				roi.handleMouseDown(sx, sy);
 				roiManagerSelect(roi, false);
+				ResultsTable.selectRow(roi);
 				return true;
 			}
 		}
@@ -1464,9 +1607,11 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		int index = rm.getRoiIndex(roi);
 		if (index<0)
 			return false;
-		rm.select(imp, index);
-		if (delete)
+		if (delete) {
+			rm.select(imp, index);
 			rm.runCommand("delete");
+		} else
+			rm.selectAndMakeVisible(imp, index);
 		return true;
     }
     
@@ -1513,6 +1658,27 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		PlugInTool tool = Toolbar.getPlugInTool();
 		if (tool!=null)
 			tool.mouseClicked(imp, e);
+	}
+	
+	public void setScaleToFit(boolean scaleToFit) {
+		this.scaleToFit = scaleToFit;
+	}
+
+	public boolean getScaleToFit() {
+		return scaleToFit;
+	}
+	
+	public boolean hideZoomIndicator(boolean hide) {
+		boolean hidden = this.hideZoomIndicator;
+		if (!(srcRect.width<imageWidth||srcRect.height<imageHeight))
+			return hidden;
+		this.hideZoomIndicator = hide;
+		setPaintPending(true);
+		repaint();
+		long t0 = System.currentTimeMillis();
+		while(getPaintPending() && (System.currentTimeMillis()-t0)<500L)
+			IJ.wait(10);
+		return hidden;
 	}
 
 }

@@ -137,8 +137,9 @@ public class FileInfo implements Cloneable {
 	public byte[][] metaData;
 	public double[] displayRanges;
 	public byte[][] channelLuts;
-	public byte[] roi;
-	public byte[][] overlay;
+	public byte[] plot;			// serialized plot
+	public byte[] roi;			// serialized roi
+	public byte[][] overlay;	// serialized overlay objects
 	public int samplesPerPixel;
 	public String openNextDir, openNextName;
     
@@ -177,21 +178,46 @@ public class FileInfo implements Cloneable {
     	return
     		"name=" + fileName
 			+ ", dir=" + directory
-			+ ", url=" + url
 			+ ", width=" + width
 			+ ", height=" + height
 			+ ", nImages=" + nImages
-			+ ", type=" + getType()
-			+ ", format=" + fileFormat
 			+ ", offset=" + getOffset()
-			+ ", whiteZero=" + (whiteIsZero?"t":"f")
-			+ ", Intel=" + (intelByteOrder?"t":"f")
+			+ ", type=" + getType()
+			+ ", byteOrder=" + (intelByteOrder?"little":"big")
+			+ ", format=" + fileFormat
+			+ ", url=" + url
+			+ ", whiteIsZero=" + (whiteIsZero?"t":"f")
 			+ ", lutSize=" + lutSize
 			+ ", comp=" + compression
 			+ ", ranges=" + (displayRanges!=null?""+displayRanges.length/2:"null")
 			+ ", samples=" + samplesPerPixel;
     }
     
+    /** Returns JavaScript code that can be used to recreate this FileInfo. */
+    public String getCode() {
+    	String code = "fi = new FileInfo();\n";
+    	String type = null;
+    	if (fileType==GRAY8)
+    		type = "GRAY8";
+    	else if (fileType==GRAY16_UNSIGNED)
+    		type = "GRAY16_UNSIGNED";
+    	else if (fileType==GRAY32_FLOAT)
+    		type = "GRAY32_FLOAT";
+    	else if (fileType==RGB)
+    		type = "RGB";
+    	if (type!=null)
+    		code += "fi.fileType = FileInfo."+type+";\n"; 
+    	code += "fi.width = "+width+";\n";
+    	code += "fi.height = "+height+";\n";
+    	if (nImages>1)
+			code += "fi.nImages = "+nImages+";\n";  	
+    	if (getOffset()>0)
+			code += "fi.longOffset = "+getOffset()+";\n";  	
+    	if (intelByteOrder)
+			code += "fi.intelByteOrder = true;\n";  	
+    	return code;
+    }
+
     private String getType() {
     	switch (fileType) {
 			case GRAY8: return "byte";
@@ -200,7 +226,7 @@ public class FileInfo implements Cloneable {
 			case GRAY32_INT: return "int";
 			case GRAY32_UNSIGNED: return "uint";
 			case GRAY32_FLOAT: return "float";
-			case COLOR8: return "byte+lut";
+			case COLOR8: return "byte(lut)";
 			case RGB: return "RGB";
 			case RGB_PLANAR: return "RGB(p)";
 			case RGB48: return "RGB48";

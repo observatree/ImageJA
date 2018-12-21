@@ -7,7 +7,7 @@ import java.awt.*;
 import java.awt.image.*;
 import java.awt.event.*;
 
-/** This class is an extended ImageWindow used to display image stacks. */
+/** This class is an extended ImageWindow that displays stacks and hyperstacks. */
 public class StackWindow extends ImageWindow implements Runnable, AdjustmentListener, ActionListener, MouseWheelListener {
 
 	protected Scrollbar sliceSelector; // for backward compatibity with Image5D
@@ -24,14 +24,13 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 	public StackWindow(ImagePlus imp) {
 		this(imp, null);
 	}
-    
+	
     public StackWindow(ImagePlus imp, ImageCanvas ic) {
 		super(imp, ic);
 		addScrollbars(imp);
 		addMouseWheelListener(this);
 		if (sliceSelector==null && this.getClass().getName().indexOf("Image5D")!=-1)
 			sliceSelector = new Scrollbar(); // prevents Image5D from crashing
-		//IJ.log(nChannels+" "+nSlices+" "+nFrames);
 		pack();
 		ic = imp.getCanvas();
 		if (ic!=null) ic.setMaxBounds();
@@ -48,6 +47,7 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 	void addScrollbars(ImagePlus imp) {
 		ImageStack s = imp.getStack();
 		int stackSize = s.getSize();
+		int sliderHeight = 0;
 		nSlices = stackSize;
 		hyperStack = imp.getOpenAsHyperStack();
 		//imp.setOpenAsHyperStack(false);
@@ -60,15 +60,16 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 			nSlices = dim[3];
 			nFrames = dim[4];
 		}
-		//IJ.log("StackWindow: "+hyperStack+" "+nChannels+" "+nSlices+" "+nFrames);
 		if (nSlices==stackSize) hyperStack = false;
 		if (nChannels*nSlices*nFrames!=stackSize) hyperStack = false;
 		if (cSelector!=null||zSelector!=null||tSelector!=null)
 			removeScrollbars();
 		ImageJ ij = IJ.getInstance();
+		//IJ.log("StackWindow: "+hyperStack+" "+nChannels+" "+nSlices+" "+nFrames+" "+imp);
 		if (nChannels>1) {
 			cSelector = new ScrollbarWithLabel(this, 1, 1, 1, nChannels+1, 'c');
 			add(cSelector);
+			sliderHeight += cSelector.getPreferredSize().height + ImageWindow.VGAP;
 			if (ij!=null) cSelector.addKeyListener(ij);
 			cSelector.addAdjustmentListener(this);
 			cSelector.setFocusable(false); // prevents scroll bar from blinking on Windows
@@ -81,6 +82,7 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 			zSelector = new ScrollbarWithLabel(this, 1, 1, 1, nSlices+1, label);
 			if (label=='t') animationSelector = zSelector;
 			add(zSelector);
+			sliderHeight += zSelector.getPreferredSize().height + ImageWindow.VGAP;
 			if (ij!=null) zSelector.addKeyListener(ij);
 			zSelector.addAdjustmentListener(this);
 			zSelector.setFocusable(false);
@@ -93,6 +95,7 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 		if (nFrames>1) {
 			animationSelector = tSelector = new ScrollbarWithLabel(this, 1, 1, 1, nFrames+1, 't');
 			add(tSelector);
+			sliderHeight += tSelector.getPreferredSize().height + ImageWindow.VGAP;
 			if (ij!=null) tSelector.addKeyListener(ij);
 			tSelector.addAdjustmentListener(this);
 			tSelector.setFocusable(false);
@@ -101,6 +104,9 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 			tSelector.setUnitIncrement(1);
 			tSelector.setBlockIncrement(blockIncrement);
 		}
+		ImageWindow win = imp.getWindow();
+		if (win!=null)
+			win.setSliderHeight(sliderHeight);
 	}
 
 	public synchronized void adjustmentValueChanged(AdjustmentEvent e) {
@@ -128,9 +134,15 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 			return;
 		if (source==cSelector)
 			SyncWindows.setC(this, cSelector.getValue());
-		else if (source==zSelector)
-			SyncWindows.setZ(this, zSelector.getValue());
-		else if (source==tSelector)
+		else if (source==zSelector) {
+			int stackSize = imp.getStackSize();
+			if (imp.getNChannels()==stackSize)
+				SyncWindows.setC(this, zSelector.getValue());
+			else if (imp.getNFrames()==stackSize)
+				SyncWindows.setT(this, zSelector.getValue());
+			else
+				SyncWindows.setZ(this, zSelector.getValue());
+		} else if (source==tSelector)
 			SyncWindows.setT(this, tSelector.getValue());
 		else
 			throw new RuntimeException("Unknownsource:"+source);
@@ -150,9 +162,20 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 	public void actionPerformed(ActionEvent e) {
 	}
 
-	public void mouseWheelMoved(MouseWheelEvent event) {
+	public void mouseWheelMoved(MouseWheelEvent e) {
 		synchronized(this) {
-			int rotation = event.getWheelRotation();
+			int rotation = e.getWheelRotation();
+			boolean ctrl = (e.getModifiers()&Event.CTRL_MASK)!=0;
+			if ((ctrl||IJ.shiftKeyDown()) && ic!=null) {
+				Point loc = ic.getCursorLoc();
+				int x = ic.screenX(loc.x);
+				int y = ic.screenY(loc.y);
+				if (rotation<0)
+					ic.zoomIn(x,y);
+				else
+					ic.zoomOut(x,y);
+				return;
+			}
 			if (hyperStack) {
 				if (rotation>0)
 					IJ.run(imp, "Next Slice [>]", "");
@@ -164,7 +187,7 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 					slice = 1;
 				else if (slice>imp.getStack().getSize())
 					slice = imp.getStack().getSize();
-				imp.setSlice(slice);
+				setSlice(imp,slice);
 				imp.updateStatusbarValue();
 				SyncWindows.setZ(this, slice);
 			}
@@ -184,19 +207,25 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 	/** Displays the specified slice and updates the stack scrollbar. */
 	public void showSlice(int index) {
 		if (imp!=null && index>=1 && index<=imp.getStackSize()) {
-			imp.setSlice(index);
+			setSlice(imp,index);
 			SyncWindows.setZ(this, index);
 		}
 	}
 	
 	/** Updates the stack scrollbar. */
 	public void updateSliceSelector() {
-		if (hyperStack || zSelector==null) return;
+		if (hyperStack || zSelector==null || imp==null)
+			return;
 		int stackSize = imp.getStackSize();
 		int max = zSelector.getMaximum();
 		if (max!=(stackSize+1))
 			zSelector.setMaximum(stackSize+1);
-		zSelector.setValue(imp.getCurrentSlice());
+		EventQueue.invokeLater(new Runnable() {
+			public void run() {
+				if (imp!=null && zSelector!=null)
+					zSelector.setValue(imp.getCurrentSlice());
+			}
+		});
 	}
 	
 	public void run() {
@@ -210,14 +239,15 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 				int s = slice;
 				slice = 0;
 				if (s!=imp.getCurrentSlice())
-					imp.setSlice(s);
+					setSlice(imp,s);
 			}
 		}
 	}
 	
 	public String createSubtitle() {
 		String subtitle = super.createSubtitle();
-		if (!hyperStack) return subtitle;
+		if (!hyperStack || imp.getStackSize()==1)
+			return subtitle;
     	String s="";
     	int[] dim = imp.getDimensions(false);
     	int channels=dim[2], slices=dim[3], frames=dim[4];
@@ -246,7 +276,7 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
     }
     
     public boolean isHyperStack() {
-    	return hyperStack;
+    	return hyperStack && getNScrollbars()>0;
     }
     
     public void setPosition(int channel, int slice, int frame) {
@@ -274,15 +304,27 @@ public class StackWindow extends ImageWindow implements Runnable, AdjustmentList
 		}
     }
     
-    public boolean validDimensions() {
-    	int c = imp.getNChannels();
-    	int z = imp.getNSlices();
-    	int t = imp.getNFrames();
-    	if (c!=nChannels||z!=nSlices||t!=nFrames||c*z*t!=imp.getStackSize())
-    		return false;
-    	else
-    		return true;
+    private void setSlice(ImagePlus imp, int n) {
+		if (imp.isLocked()) {
+			IJ.beep();
+			IJ.showStatus("Image is locked");
+		} else
+			imp.setSlice(n);
     }
+    
+	public boolean validDimensions() {
+		int c = imp.getNChannels();
+		int z = imp.getNSlices();
+		int t = imp.getNFrames();
+		//IJ.log(c+" "+z+" "+t+" "+nChannels+" "+nSlices+" "+nFrames+" "+imp.getStackSize());
+		int size = imp.getStackSize();
+		if (c==size && c*z*t==size && nSlices==size && nChannels*nSlices*nFrames==size)
+			return true;
+		if (c!=nChannels||z!=nSlices||t!=nFrames||c*z*t!=size)
+			return false;
+		else
+			return true;
+	}
     
     public void setAnimate(boolean b) {
     	if (running2!=b && animationSelector!=null)

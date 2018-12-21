@@ -47,13 +47,13 @@ public class ScaleDialog implements PlugInFilter {
 				known = 1.0;
 			}
 			double dscale = measured/known;
-			digits = Tools.getDecimalPlaces(dscale, dscale);
+			digits = Tools.getDecimalPlaces(dscale);
 			unit = cal.getUnit();
 			scale = IJ.d2s(dscale, digits)+" pixels/"+unit;
 			aspectRatio = cal.pixelHeight/cal.pixelWidth;
 		}
 		
-		digits = Tools.getDecimalPlaces(measured, measured);
+		digits = Tools.getDecimalPlaces(measured);
 		int asDigits = aspectRatio==1.0?1:3;
 		SetScaleDialog gd = new SetScaleDialog("Set Scale", scale, length);
 		gd.addNumericField("Distance in pixels:", measured, digits, 8, null);
@@ -66,6 +66,8 @@ public class ScaleDialog implements PlugInFilter {
 		gd.setInsets(10, 0, 0);
 		gd.addMessage("Scale: "+"12345.789 pixels per centimeter");
 		gd.addHelp(IJ.URL+"/docs/menus/analyze.html#scale");
+		if (aspectRatio==1.0 && "pixel".equals(unit))
+			gd.setSmartRecording(true);
 		gd.showDialog();
 		if (gd.wasCanceled())
 			return;
@@ -90,7 +92,8 @@ public class ScaleDialog implements PlugInFilter {
 		} else {
 			if (gd.scaleChanged || IJ.macroRunning()) {
 				cal.pixelWidth = known/measured;
-				cal.pixelDepth = cal.pixelWidth;
+				if (cal.pixelDepth==1.0)
+					cal.pixelDepth = cal.pixelWidth;
 			}
 			if (aspectRatio!=0.0)
 				cal.pixelHeight = cal.pixelWidth*aspectRatio;
@@ -98,8 +101,10 @@ public class ScaleDialog implements PlugInFilter {
 				cal.pixelHeight = cal.pixelWidth;
 			cal.setUnit(unit);
 		}
-		if (!cal.equals(calOrig))
+		if (!cal.equals(calOrig)) {
 			imp.setCalibration(cal);
+			imp.changes = true;
+		}
 		imp.setGlobalCalibration(global2?cal:null);
 		if (global2 || global2!=global1)
 			WindowManager.repaintImageWindows();
@@ -163,7 +168,7 @@ class SetScaleDialog extends GenericDialog {
  			theScale = NO_SCALE;
  		else {
  			double scale = measured/known;
-			int digits = Tools.getDecimalPlaces(scale, scale);
+			int digits = Tools.getDecimalPlaces(scale);
  			theScale = IJ.d2s(scale,digits)+(scale==1.0?" pixel/":" pixels/")+unit;
  		}
  		setScale(theScale);

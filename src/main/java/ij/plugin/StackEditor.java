@@ -28,7 +28,7 @@ public class StackEditor implements PlugIn {
 	}
 
 	void addSlice() {
-		if (imp.isHyperStack() || (imp.isComposite() && nSlices==imp.getNChannels())) {
+		if (imp.isHyperStack() || imp.isComposite()) {
 			addHyperstackChannelSliceOrFrame();
 			return;
 		}
@@ -84,12 +84,7 @@ public class StackEditor implements PlugIn {
 		int c1 = imp.getChannel();
 		int z1 = imp.getSlice();
 		int t1 = imp.getFrame();
-		ArrayList list = new ArrayList();
-		if (channels>1) list.add("channel");
-		if (slices>1) list.add("slice");
-		if (frames>1) list.add("frame");
-		String[] choices = new String[list.size()];
-		list.toArray(choices);
+		String[] choices = {"channel", "slice", "frame"};
 		String choice = choices[0];
 		if (frames>1 && slices==1)
 			choice = "frame";
@@ -97,14 +92,20 @@ public class StackEditor implements PlugIn {
 			choice = "slice";
 		GenericDialog gd = new GenericDialog("Add");
 		gd.addChoice("Add", choices, choice);
+		gd.addCheckbox("Prepend", false);
 		gd.showDialog();
-		if (gd.wasCanceled()) return;
+		if (gd.wasCanceled())
+			return;
 		choice = gd.getNextChoice();
-		if (!imp.lock()) return;
+		boolean prepend = gd.getNextBoolean();
+		if (!imp.lock())
+			return;
 		ImageStack stack = imp.getStack();
 		LUT[] luts = null;
 		if (choice.equals("frame")) { // add time point
 			int index = imp.getStackIndex(channels, slices, t1);
+			if (prepend)
+				index = 0;
 			for (int i=0; i<channels*slices; i++) {
 				ImageProcessor ip = stack.getProcessor(1).duplicate();
 				ip.setColor(0); ip.fill();
@@ -114,6 +115,8 @@ public class StackEditor implements PlugIn {
 		} else if (choice.equals("slice")) { // add slice to all volumes
 			for (int t=frames; t>=1; t--) {
 				int index = imp.getStackIndex(channels, z1, t);
+				if (prepend)
+					index = (t-1)*channels*slices;
 				for (int i=0; i<channels; i++) {
 					ImageProcessor ip = stack.getProcessor(1).duplicate();
 					ip.setColor(0); ip.fill();
@@ -125,7 +128,13 @@ public class StackEditor implements PlugIn {
 			if (imp.isComposite())
 				luts = ((CompositeImage)imp).getLuts();
 			int index = imp.getStackIndex(c1, slices, frames);
-			while (index>0) {
+			int minIndex = 1;
+			if (prepend) {
+				index = channels*slices*frames - channels;
+				minIndex = 0;
+				c1 = 0;
+			}
+			while (index>=minIndex) {
 				ImageProcessor ip = stack.getProcessor(1).duplicate();
 				ip.setColor(0); ip.fill();
 				stack.addSlice(null, ip, index);
@@ -150,6 +159,10 @@ public class StackEditor implements PlugIn {
 		}
 		imp.unlock();
 		imp.repaintWindow();
+		if (prepend) {
+			imp.setPosition(channels, slices, frames);
+			imp.setPosition(1, 1, 1);
+		}
 		imp.changes = true;
 	}
 	
@@ -232,8 +245,15 @@ public class StackEditor implements PlugIn {
 	}
 
 	public void convertStackToImages(ImagePlus imp) {
-		if (nSlices<2)
-			{IJ.error("\"Convert Stack to Images\" requires a stack"); return;}
+		if (nSlices<2) {
+			IJ.wait(500);
+			imp = IJ.getImage();
+			nSlices = imp.getStackSize();
+		}
+		if (nSlices<2) {
+			IJ.error("\"Convert Stack to Images\" requires a stack\n"+imp);
+			return;
+		}
 		if (!imp.lock())
 			return;
 		ImageStack stack = imp.getStack();
@@ -248,6 +268,8 @@ public class StackEditor implements PlugIn {
 		Calibration cal = imp.getCalibration();
 		CompositeImage cimg = imp.isComposite()?(CompositeImage)imp:null;
 		if (imp.getNChannels()!=imp.getStackSize()) cimg = null;
+		Overlay overlay = imp.getOverlay();
+		int lastImageID = 0;
 		for (int i=1; i<=size; i++) {
 			String label = stack.getShortSliceLabel(i);
 			String title = label!=null&&!label.equals("")?label:getTitle(imp, i);
@@ -264,6 +286,21 @@ public class StackEditor implements PlugIn {
 			String info = stack.getSliceLabel(i);
 			if (info!=null && !info.equals(label))
 				imp2.setProperty("Info", info);
+			imp2.setIJMenuBar(i==size);
+			if (overlay!=null) {
+				Overlay overlay2 = new Overlay();
+				for (int j=0; j<overlay.size(); j++) {
+					Roi roi = overlay.get(j);
+					if (roi.getPosition()==i) {
+						roi.setPosition(0);
+						overlay2.add((Roi)roi.clone());
+					}
+				}
+				if (overlay2.size()>0)
+					imp2.setOverlay(overlay2);
+			}
+			if (i==size)
+				lastImageID = imp2.getID();
 			imp2.show();
 		}
 		imp.changes = false;

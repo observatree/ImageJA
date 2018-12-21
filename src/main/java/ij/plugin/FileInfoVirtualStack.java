@@ -7,11 +7,11 @@ import java.awt.*;
 import java.io.*;
 import java.util.Properties;
 
-/** This plugin opens a multi-page TIFF file as a virtual stack. It
-	implements the File/Import/TIFF Virtual Stack command. */
+/** This plugin opens a multi-page TIFF file, or a set of raw images, as a 
+	virtual stack. It implements the File/Import/TIFF Virtual Stack command. */
 public class FileInfoVirtualStack extends VirtualStack implements PlugIn {
-	FileInfo[] info;
-	int nImages;
+	private FileInfo[] info;
+	private int nImages;
 	
 	/* Default constructor. */
 	public FileInfoVirtualStack() {}
@@ -20,7 +20,9 @@ public class FileInfoVirtualStack extends VirtualStack implements PlugIn {
 	public FileInfoVirtualStack(FileInfo fi) {
 		info = new FileInfo[1];
 		info[0] = fi;
-		open(true);
+		ImagePlus imp = open();
+		if (imp!=null)
+			imp.show();
 	}
 
 	/* Constructs a FileInfoVirtualStack from a FileInfo 
@@ -28,23 +30,57 @@ public class FileInfoVirtualStack extends VirtualStack implements PlugIn {
 	public FileInfoVirtualStack(FileInfo fi, boolean show) {
 		info = new FileInfo[1];
 		info[0] = fi;
-		open(show);
+		ImagePlus imp = open();
+		if (imp!=null && show)
+			imp.show();
+	}
+	
+	/* Constructs a FileInfoVirtualStack from an array of FileInfo objects. */
+	public FileInfoVirtualStack(FileInfo[] fi) {
+		info = fi;
+		nImages = info.length;
+	}
+
+	/** Opens the specified tiff file as a virtual stack. */
+	public static ImagePlus openVirtual(String path) {
+		OpenDialog  od = new OpenDialog("Open TIFF", path);
+		String name = od.getFileName();
+		String  dir = od.getDirectory();
+		if (name==null)
+			return null;
+		FileInfoVirtualStack stack = new FileInfoVirtualStack();
+		stack.init(dir, name);
+		if (stack.info==null)
+			return null;
+		else
+			return stack.open();
 	}
 
 	public void run(String arg) {
 		OpenDialog  od = new OpenDialog("Open TIFF", arg);
 		String name = od.getFileName();
-		if (name==null) return;
+		String  dir = od.getDirectory();
+		if (name==null)
+			return;
+		init(dir, name);
+		if (info==null)
+			return;
+		ImagePlus imp = open();
+		if (imp!=null)
+			imp.show();
+	}
+	
+	private void init(String dir, String name) {
 		if (name.endsWith(".zip")) {
 			IJ.error("Virtual Stack", "ZIP compressed stacks not supported");
 			return;
 		}
-		String  dir = od.getDirectory();
 		TiffDecoder td = new TiffDecoder(dir, name);
 		if (IJ.debugMode) td.enableDebugging();
 		IJ.showStatus("Decoding TIFF header...");
-		try {info = td.getTiffInfo();}
-		catch (IOException e) {
+		try {
+			info = td.getTiffInfo();
+		} catch (IOException e) {
 			String msg = e.getMessage();
 			if (msg==null||msg.equals("")) msg = ""+e;
 			IJ.error("TiffDecoder", msg);
@@ -56,13 +92,13 @@ public class FileInfoVirtualStack extends VirtualStack implements PlugIn {
 		}
 		if (IJ.debugMode)
 			IJ.log(info[0].debugInfo);
-		open(true);
 	}
-	
-	void open(boolean show) {
+		
+	private ImagePlus open() {
 		FileInfo fi = info[0];
 		int n = fi.nImages;
 		if (info.length==1 && n>1) {
+			n = validateNImages(fi);
 			info = new FileInfo[n];
 			long size = fi.width*fi.height*fi.getBytesPerPixel();
 			for (int i=0; i<n; i++) {
@@ -73,11 +109,9 @@ public class FileInfoVirtualStack extends VirtualStack implements PlugIn {
 		}
 		nImages = info.length;
 		FileOpener fo = new FileOpener(info[0] );
-		ImagePlus imp = fo.open(false);
-		if (nImages==1 && fi.fileType==FileInfo.RGB48) {
-			if (show) imp.show();
-			return;
-		}
+		ImagePlus imp = fo.openImage();
+		if (nImages==1 && fi.fileType==FileInfo.RGB48)
+			return imp;
 		Properties props = fo.decodeDescriptionString(fi);
 		ImagePlus imp2 = new ImagePlus(fi.fileName, this);
 		imp2.setFileInfo(fi);
@@ -96,15 +130,29 @@ public class FileInfoVirtualStack extends VirtualStack implements PlugIn {
 					imp2.setOpenAsHyperStack(true);
 			}
 			if (channels>1 && fi.description!=null) {
-				int mode = CompositeImage.COMPOSITE;
+				int mode = IJ.COMPOSITE;
 				if (fi.description.indexOf("mode=color")!=-1)
-					mode = CompositeImage.COLOR;
+					mode = IJ.COLOR;
 				else if (fi.description.indexOf("mode=gray")!=-1)
-					mode = CompositeImage.GRAYSCALE;
+					mode = IJ.GRAYSCALE;
 				imp2 = new CompositeImage(imp2, mode);
 			}
 		}
-		if (show) imp2.show();
+		return imp2;
+	}
+	
+	private int validateNImages(FileInfo fi) {
+		File f = new File(fi.directory + fi.fileName);
+		if (!f.exists())
+			return fi.nImages;
+		long fileLength = f.length();
+		long bytesPerImage = fi.width*fi.height*fi.getBytesPerPixel();
+		for (int i=fi.nImages-1; i>=0; i--) {
+			long offset =  fi.getOffset() + i*(bytesPerImage+fi.gapBetweenImages);
+			if (offset+bytesPerImage<=fileLength)
+				return i+1;
+		}
+		return fi.nImages;
 	}
 
 	int getInt(Properties props, String key) {
@@ -144,11 +192,18 @@ public class FileInfoVirtualStack extends VirtualStack implements PlugIn {
 	public ImageProcessor getProcessor(int n) {
 		if (n<1 || n>nImages)
 			throw new IllegalArgumentException("Argument out of range: "+n);
-		if (IJ.debugMode) IJ.log("FileInfoVirtualStack: "+n+", "+info[n-1].getOffset());
 		//if (n>1) IJ.log("  "+(info[n-1].getOffset()-info[n-2].getOffset()));
 		info[n-1].nImages = 1; // why is this needed?
-		FileOpener fo = new FileOpener(info[n-1]);
-		ImagePlus imp = fo.open(false);
+		ImagePlus imp = null;
+		if (IJ.debugMode) {
+			long t0 = System.currentTimeMillis();
+			FileOpener fo = new FileOpener(info[n-1]);
+			imp = fo.openImage();
+			IJ.log("FileInfoVirtualStack: "+n+", offset="+info[n-1].getOffset()+", "+(System.currentTimeMillis()-t0)+"ms");
+		} else {
+			FileOpener fo = new FileOpener(info[n-1]);
+			imp = fo.openImage();
+		}
 		if (imp!=null)
 			return imp.getProcessor();
 		else {
@@ -186,5 +241,19 @@ public class FileInfoVirtualStack extends VirtualStack implements PlugIn {
 	public int getHeight() {
 		return info[0].height;
 	}
-    
+	
+	/** Adds an image to this stack. */
+	public synchronized  void addImage(FileInfo fileInfo) {
+		nImages++;
+		//IJ.log("addImage: "+nImages+"	"+fileInfo);
+		if (info==null)
+			info = new FileInfo[250];
+		if (nImages==info.length) {
+			FileInfo[] tmp = new FileInfo[nImages*2];
+			System.arraycopy(info, 0, tmp, 0, nImages);
+			info = tmp;
+		}
+		info[nImages-1] = fileInfo;
+	}
+		
 }

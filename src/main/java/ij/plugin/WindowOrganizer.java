@@ -5,12 +5,15 @@ import ij.gui.*;
 import ij.plugin.frame.ThresholdAdjuster;
 import java.awt.*;
 
+/** This class implements the Window menu's "Show All", "Main Window", "Cascade" and "Tile" commands. */
 public class WindowOrganizer implements PlugIn {
 
-	private static final int XSTART=4, YSTART=80, XOFFSET=8, YOFFSET=24,MAXSTEP=200,GAP=2;
+	private static final int XSTART=4, YSTART=94, XOFFSET=8, YOFFSET=24,MAXSTEP=200,GAP=2;
 	private int titlebarHeight = IJ.isMacintosh()?40:20;
 
 	public void run(String arg) {
+		if (arg.equals("imagej"))
+			{showImageJ(); return;}
 		int[] wList = WindowManager.getIDList();
 		if (arg.equals("show"))
 			{showAll(wList); return;}
@@ -36,6 +39,10 @@ public class WindowOrganizer implements PlugIn {
 			ImageWindow win = getWindow(wList[i]);
 			if (win==null)
 				continue;
+			if (win instanceof PlotWindow && !((PlotWindow)win).getPlot().isFrozen()) {
+				IJ.error("Tile", "Unfrozen plot windows cannot be tiled.");
+				return;
+			}
 			Dimension d = win.getSize();
 			int w = d.width;
 			int h = d.height + titlebarHeight;
@@ -57,7 +64,6 @@ public class WindowOrganizer implements PlugIn {
 		double averageHeight = totalHeight/nPics;
 		int tileWidth = (int)averageWidth;
 		int tileHeight = (int)averageHeight;
-		//IJ.write("tileWidth, tileHeight: "+tileWidth+" "+tileHeight);
  		int hspace = screen.width - 2 * GAP;
 		if (tileWidth>hspace)
 			tileWidth = hspace;
@@ -101,11 +107,12 @@ public class WindowOrganizer implements PlugIn {
 			ImageWindow win = getWindow(wList[i]);
 			if (win!=null) {
 				win.setLocation(hloc, vloc);
-				//IJ.write(i+" "+w+" "+tileWidth+" "+mag+" "+IJ.d2s(zoomFactor,2)+" "+zoomCount);
 				ImageCanvas canvas = win.getCanvas();
 				while (win.getSize().width*0.85>=tileWidth && canvas.getMagnification()>0.03125)
 					canvas.zoomOut(0, 0);
 				win.toFront();
+				ImagePlus imp = win.getImagePlus();
+				if (imp!=null) imp.setIJMenuBar(i==nPics-1);
 			}
 			hloc += tileWidth + GAP;
 		}
@@ -146,9 +153,17 @@ public class WindowOrganizer implements PlugIn {
 			win.toFront();
 				x += XOFFSET;
 			y += YOFFSET;
+			ImagePlus imp = win.getImagePlus();
+			if (imp!=null) imp.setIJMenuBar(i==wList.length-1);
 		}
 	}
 	
+	void showImageJ() {
+		ImageJ ij = IJ.getInstance();
+		if (ij!=null)
+			ij.toFront();
+	}
+
 	void showAll(int[] wList) {
 		if (wList!=null) {
 			for (int i=0; i<wList.length; i++) {

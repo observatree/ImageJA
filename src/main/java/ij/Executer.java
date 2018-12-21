@@ -3,6 +3,7 @@ import ij.util.Tools;
 import ij.text.TextWindow;
 import ij.plugin.MacroInstaller;
 import ij.plugin.frame.Recorder;
+import ij.plugin.frame.Editor;
 import ij.io.OpenDialog;
 import java.io.*;
 import java.util.*;
@@ -47,7 +48,8 @@ public class Executer implements Runnable {
 	}
 
 	public void run() {
-		if (command==null) return;
+		if (command==null)
+			return;
 		if (listeners.size()>0) synchronized (listeners) {
 			for (int i=0; i<listeners.size(); i++) {
 				CommandListener listener = (CommandListener)listeners.elementAt(i);
@@ -85,7 +87,7 @@ public class Executer implements Runnable {
 						return;
 					s = Tools.fixNewLines(s);
 				}
-				int w=500, h=300;
+				int w=500, h=340;
 				if (s.indexOf("UnsupportedClassVersionError")!=-1) {
 					if (s.indexOf("version 49.0")!=-1) {
 						s = e + "\n \nThis plugin requires Java 1.5 or later.";
@@ -99,16 +101,24 @@ public class Executer implements Runnable {
 						s = e + "\n \nThis plugin requires Java 1.7 or later.";
 						w=700; h=150;
 					}
+					if (s.indexOf("version 52.0")!=-1) {
+						s = e + "\n \nThis plugin requires Java 1.8 or later.";
+						w=700; h=150;
+					}
 				}
-				if (IJ.getInstance()!=null)
+				if (IJ.getInstance()!=null) {
+					s = IJ.getInstance().getInfo()+"\n \n"+s;
 					new TextWindow("Exception", s, w, h);
-				else
+				} else
 					IJ.log(s);
 			}
+		} finally {
+			if (thread!=null)
+				WindowManager.setTempCurrentImage(null);
 		}
 	}
-	
-    void runCommand(String cmd) {
+	    
+	void runCommand(String cmd) {
 		Hashtable table = Menus.getCommands();
 		String className = (String)table.get(cmd);
 		if (className!=null) {
@@ -125,22 +135,53 @@ public class Executer implements Runnable {
     			IJ.open(IJ.getDirectory("plugins")+arg);
     		else
 				IJ.runPlugIn(cmd, className, arg);
-		} else {
-			// Is this command in Plugins>Macros?
+		} else { // command is not a plugin
+			// is command in the Plugins>Macros menu?
 			if (MacroInstaller.runMacroCommand(cmd))
 				return;
-			// Is this command a LUT name?
-			String path = IJ.getDirectory("luts")+cmd+".lut";
-			File f = new File(path);
-			if (f.exists()) {
-				String dir = OpenDialog.getLastDirectory();
-				IJ.open(path);
-				OpenDialog.setLastDirectory(dir);
-			} else if (!openRecent(cmd))
-				IJ.error("Unrecognized command: " + cmd);
+			// is it in the Image>Lookup Tables menu?
+			if (loadLut(cmd))
+				return;
+			// is it in the File>Open Recent menu?
+			if (openRecent(cmd))
+				return;
+			// is it an example in Help>Examples menu?
+			if (Editor.openExample(cmd))
+				return;
+			if ("Auto Threshold".equals(cmd)&&(String)table.get("Auto Threshold...")!=null)
+				runCommand("Auto Threshold...");
+			else if ("Enhance Local Contrast (CLAHE)".equals(cmd)&&(String)table.get("CLAHE ")!=null)
+				runCommand("CLAHE ");
+			else {
+				if ("Table...".equals(cmd))
+					IJ.runPlugIn("ij.plugin.NewPlugin", "table");
+				else
+					IJ.error("Unrecognized command: \"" + cmd+"\"");
+			}
 	 	}
+    }   
+
+    /** Opens a .lut file from the ImageJ/luts directory and returns 'true' if successful. */
+    public static boolean loadLut(String name) {
+		String path = IJ.getDirectory("luts")+name.replace(" ","_")+".lut";
+		File f = new File(path);
+		if (!f.exists()) {
+			path = IJ.getDirectory("luts")+name+".lut";
+			f = new File(path);
+		}
+		if (!f.exists()) {
+			path = IJ.getDirectory("luts")+name.toLowerCase().replace(" ","_")+".lut";
+			f = new File(path);
+		}
+		if (f.exists()) {
+			String dir = OpenDialog.getLastDirectory();
+			IJ.open(path);
+			OpenDialog.setLastDirectory(dir);
+			return true;
+		}
+		return false;
     }
-    
+
     /** Opens a file from the File/Open Recent menu 
  	      and returns 'true' if successful. */
     boolean openRecent(String cmd) {
@@ -169,6 +210,10 @@ public class Executer implements Runnable {
 	/** Removes the specified command listener. */
 	public static void removeCommandListener(CommandListener listener) {
 		listeners.removeElement(listener);
+	}
+	
+	public static int getListenerCount() {
+		return listeners.size();
 	}
 
 }

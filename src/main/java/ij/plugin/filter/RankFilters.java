@@ -14,13 +14,14 @@ import java.util.Arrays;
  */
  // Version 2012-07-15 M. Schmid:	Fixes a bug that could cause preview not to work correctly
  // Version 2012-12-23 M. Schmid:	Test for inverted LUT only once (not in each slice)
+ // Version 2014-10-10 M. Schmid:   Fixes a bug that caused Threshold=0 when calling from API
 
 public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 	public static final int	 MEAN=0, MIN=1, MAX=2, VARIANCE=3, MEDIAN=4, OUTLIERS=5, DESPECKLE=6, REMOVE_NAN=7,
 			OPEN=8, CLOSE=9;
-	private static int HIGHEST_FILTER = CLOSE;
-	private static final int BRIGHT_OUTLIERS = 0, DARK_OUTLIERS = 1;
+	public static final int BRIGHT_OUTLIERS = 0, DARK_OUTLIERS = 1;
 	private static final String[] outlierStrings = {"Bright","Dark"};
+	private static int HIGHEST_FILTER = CLOSE;
 	// Filter parameters
 	private double radius;
 	private double threshold;
@@ -30,7 +31,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 	private static double[] lastRadius = new double[HIGHEST_FILTER+1]; //separate for each filter type
 	private static double lastThreshold = 50.;
 	private static int lastWhichOutliers = BRIGHT_OUTLIERS;
-	// 
+	//
 	// F u r t h e r   c l a s s   v a r i a b l e s
 	int flags = DOES_ALL|SUPPORTS_MASKING|KEEP_PREVIEW;
 	private ImagePlus imp;
@@ -55,7 +56,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 	 * @param arg	Defines type of filter operation
 	 * @param imp	The ImagePlus to be processed
 	 * @return		Flags specifying further action of the PlugInFilterRunner
-	 */	   
+	 */
 	public int setup(String arg, ImagePlus imp) {
 		this.imp = imp;
 		if (arg.equals("mean"))
@@ -237,8 +238,9 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 		Rectangle roi = ip.getRoi();
 		int width = ip.getWidth();
 		Object pixels = ip.getPixels();
-
 		int numThreads = Math.min(roi.height, this.numThreads);
+		if (numThreads==0)
+			return;
 
 		int kHeight = kHeight(lineRadii);
 		int kRadius	 = kRadius(lineRadii);
@@ -246,7 +248,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 		final int cacheHeight = kHeight + (numThreads>1 ? 2*numThreads : 0);
 		// 'cache' is the input buffer. Each line y in the image is mapped onto cache line y%cacheHeight
 		final float[] cache = new float[cacheWidth*cacheHeight];
-		highestYinCache = Math.max(roi.y-kHeight/2, 0) - 1; //this line+1 will be read into the cache first 
+		highestYinCache = Math.max(roi.y-kHeight/2, 0) - 1; //this line+1 will be read into the cache first
 
 		final int[] yForThread = new int[numThreads];		//threads announce here which line they currently process
 		Arrays.fill(yForThread, -1);
@@ -313,7 +315,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 		int width = ip.getWidth();
 		int height = ip.getHeight();
 		Rectangle roi = ip.getRoi();
-		
+
 		int kHeight = kHeight(lineRadii);
 		int kRadius	 = kRadius(lineRadii);
 		int kNPoints = kNPoints(lineRadii);
@@ -327,7 +329,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 		int xminInside = xmin>0 ? xmin : 0;
 		int xmaxInside = xmax<width ? xmax : width;
 		int widthInside = xmaxInside - xminInside;
-		
+
 		boolean minOrMax = filterType == MIN || filterType == MAX;
 		boolean minOrMaxOrOutliers = minOrMax || filterType == OUTLIERS;
 		boolean sumFilter = filterType == MEAN || filterType == VARIANCE;
@@ -347,7 +349,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 		long lastTime = System.currentTimeMillis();
 		int previousY = kHeight/2-cacheHeight;
 		boolean rgb = ip instanceof ColorProcessor;
-		
+
 		while (!aborted[0]) {
 			int y = arrayMax(yForThread) + 1;		// y of the next line that needs processing
 			yForThread[threadNumber] = y;
@@ -373,7 +375,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 					}
 				}
 			}
-			
+
 			for (int i=0; i<cachePointers.length; i++)	//shift kernel pointers to new line
 				cachePointers[i] = (cachePointers[i] + cacheWidth*(y-previousY))%cache.length;
 			previousY = y;
@@ -427,7 +429,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 			int cacheLineP = cacheWidth * (y % cacheHeight) + kRadius;	//points to pixel (roi.x, y)
 			filterLine(values, width, cache, cachePointers, kNPoints, cacheLineP, roi, y,	// F I L T E R
 					sums, medianBuf1, medianBuf2, minMaxOutliersSign, maxValue, isFloat, filterType,
-					smallKernel, sumFilter, minOrMax, minOrMaxOrOutliers);
+					smallKernel, sumFilter, minOrMax, minOrMaxOrOutliers, threshold);
 			if (!isFloat)		//Float images: data are written already during 'filterLine'
 				writeLineToPixels(values, pixels, roi.x+y*width, roi.width, colorChannel);	// W R I T E
 			//IJ.log("thread "+threadNumber+" @y="+y+" line done");
@@ -451,7 +453,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 
 	private void filterLine(float[] values, int width, float[] cache, int[] cachePointers, int kNPoints, int cacheLineP, Rectangle roi, int y,
 			double[] sums, float[] medianBuf1, float[] medianBuf2, float minMaxOutliersSign, float maxValue, boolean isFloat, int filterType,
-			boolean smallKernel, boolean sumFilter, boolean minOrMax, boolean minOrMaxOrOutliers) {
+			boolean smallKernel, boolean sumFilter, boolean minOrMax, boolean minOrMaxOrOutliers, float threshold) {
 			int valuesP = isFloat ? roi.x+y*width : 0;
 			float max = 0f;
 			float median = Float.isNaN(cache[cacheLineP]) ? 0 : cache[cacheLineP];	// a first guess
@@ -493,10 +495,15 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 					else	{// Variance: sum of squares - square of sums
 						float value = (float)((sums[1] - sums[0]*sums[0]/kNPoints)/kNPoints);
 						if (value>maxValue) value = maxValue;
+                        if (value < 0) value = 0;   // numeric noise can cause values < 0
 						values[valuesP] = value;
 					}
 				} else if (filterType == MEDIAN) {
-					median = getMedian(cache, x, cachePointers, medianBuf1, medianBuf2, kNPoints, median);
+					if (isFloat) {
+						median = Float.isNaN(values[valuesP]) ? Float.NaN : values[valuesP]; // a first guess
+						median = getNaNAwareMedian(cache, x, cachePointers, medianBuf1, medianBuf2, kNPoints, median);
+					} else
+						median = getMedian(cache, x, cachePointers, medianBuf1, medianBuf2, kNPoints, median);
 					values[valuesP] = median;
 				} else if (filterType == OUTLIERS) {
 					float v = cache[cacheLineP+x];
@@ -527,7 +534,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 		if (y < height) {
 			readLineToCache(pixels, y*width, xminInside, widthInside,
 					cache, lineInCache*cacheWidth, padLeft, padRight, colorChannel);
-			if (y==0) for (int prevY = roiY-kHeight/2; prevY<0; prevY++) {	//for y<0, pad with y=0 border pixels 
+			if (y==0) for (int prevY = roiY-kHeight/2; prevY<0; prevY++) {	//for y<0, pad with y=0 border pixels
 				int prevLineInCache = cacheHeight+prevY;
 				System.arraycopy(cache, 0, cache, prevLineInCache*cacheWidth, cacheWidth);
 			}
@@ -615,7 +622,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 		double sum=0, sum2=0;
 		for (int kk=0; kk<kernel.length; kk++) {	// y within the cache stripe (we have 2 kernel pointers per cache line)
 			for (int p=kernel[kk++]+xCache0; p<=kernel[kk]+xCache0; p++) {
-				float v = cache[p];
+				double v = cache[p];
 				sum += v;
 				sum2 += v*v;
 			}
@@ -626,15 +633,15 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 	}
 
 	/** Add all values and values squared at the right border inside minus at the left border outside the kernal area.
-	 *	Output is added or subtracted to/from array sums[0] += sum; sums[1] += sum of squares  when at 
+	 *	Output is added or subtracted to/from array sums[0] += sum; sums[1] += sum of squares  when at
 	 *	the right border, minus when at the left border */
 	private static void addSideSums(float[] cache, int xCache0, int[] kernel, double[] sums) {
 		double sum=0, sum2=0;
 		for (int kk=0; kk<kernel.length; /*k++;k++ below*/) {
-			float v = cache[kernel[kk++]+(xCache0-1)];
+			double v = cache[kernel[kk++]+(xCache0-1)]; //this value is not in the kernel area any more
 			sum -= v;
 			sum2 -= v*v;
-			v = cache[kernel[kk++]+xCache0];
+			v = cache[kernel[kk++]+xCache0];            //this value comes into the kernel area
 			sum += v;
 			sum2 += v*v;
 		}
@@ -759,11 +766,10 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 	}
 
 	/** Create a circular kernel (structuring element) of a given radius.
-	 *	@param radius:
+	 *	@param radius
 	 *	Radius = 0.5 includes the 4 neighbors of the pixel in the center,
 	 *	radius = 1 corresponds to a 3x3 kernel size.
-	 *	@param width: width of the roi (or image if roi width=image width) for filtering.
-	 *	@return:
+	 *	@return the circular kernel
 	 *	The output is an array that gives the length of each line of the structuring element
 	 *	(kernel) to the left (negative) and to the right (positive):
 	 *	[0] left in line 0, [1] right in line 0,
@@ -812,7 +818,7 @@ public class RankFilters implements ExtendedPlugInFilter, DialogListener {
 	private int kRadius(int[] lineRadii) {
 		return lineRadii[lineRadii.length-1];
 	}
-	
+
 	//number of points in kernal area
 	private int kNPoints(int[] lineRadii) {
 		return lineRadii[lineRadii.length-2];

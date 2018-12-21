@@ -19,7 +19,7 @@ public class MacroRunner implements Runnable {
 	private String argument;
 	private Editor editor;
 
-	/** Create a MacrRunner. */
+	/** Create a MacroRunner. */
 	public MacroRunner() {
 	}
 
@@ -116,6 +116,15 @@ public class MacroRunner implements Runnable {
 		}
 	}
 	
+	/** Runs a tokenized macro on the current thread. */
+	public void run(Program pgm, int address, String name) {
+		this.pgm = pgm;
+		this.address = address;
+		this.name = name;
+		this.argument = null;
+		run();
+	}
+
 	public Thread getThread() {
 		return thread;
 	}
@@ -124,7 +133,7 @@ public class MacroRunner implements Runnable {
 		Interpreter interp = new Interpreter();
 		interp.argument = argument;
 		if (editor!=null)
-			interp.setEditor(editor);
+			interp.setDebugger(editor);
 		try {
 			if (pgm==null)
 				interp.run(macro);
@@ -147,11 +156,17 @@ public class MacroRunner implements Runnable {
 			IJ.showStatus("");
 			IJ.showProgress(1.0);
 			ImagePlus imp = WindowManager.getCurrentImage();
-			if (imp!=null) imp.unlock();
+			if (imp!=null)
+				imp.unlock();
 			String msg = e.getMessage();
-			if (e instanceof RuntimeException && msg!=null && e.getMessage().equals(Macro.MACRO_CANCELED))
+			if (e instanceof RuntimeException && msg!=null && e.getMessage().equals(Macro.MACRO_CANCELED)) {
+				interp.error(null);
 				return;
+			}
 			IJ.handleException(e);
+		} finally {
+			if (thread!=null)
+				WindowManager.setTempCurrentImage(null);
 		}
 	}
 

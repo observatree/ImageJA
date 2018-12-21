@@ -2,6 +2,7 @@ package ij.plugin;
 import ij.*;
 import ij.io.*;
 import ij.process.*;
+import ij.gui.ImageWindow;
 import java.awt.*;
 import java.io.*;
 import java.awt.image.*;
@@ -75,9 +76,9 @@ public class LutLoader extends ImagePlus implements PlugIn {
 		if (imp!=null) {
 			if (imp.getType()==ImagePlus.COLOR_RGB)
 				IJ.error("LUTs cannot be assiged to RGB Images.");
-			else if (imp.isComposite() && ((CompositeImage)imp).getMode()==CompositeImage.GRAYSCALE) {
+			else if (imp.isComposite() && ((CompositeImage)imp).getMode()==IJ.GRAYSCALE) {
 				CompositeImage cimp = (CompositeImage)imp;
-				cimp.setMode(CompositeImage.COLOR);
+				cimp.setMode(IJ.COLOR);
 				int saveC = cimp.getChannel();
 				IndexColorModel cm = new IndexColorModel(8, 256, fi.reds, fi.greens, fi.blues);
 				for (int c=1; c<=cimp.getNChannels(); c++) {
@@ -96,6 +97,8 @@ public class LutLoader extends ImagePlus implements PlugIn {
 				if (imp.getStackSize()>1)
 					imp.getStack().setColorModel(cm);
 				imp.updateAndRepaintWindow();
+				if (IJ.isMacro() && imp.getWindow()!=null)
+					IJ.wait(25);
 			}
 		} else
 			createImage(fi, showImage);
@@ -216,23 +219,49 @@ public class LutLoader extends ImagePlus implements PlugIn {
 			i2 = i1+1;
 			if (i2==nColors) i2 = nColors-1;
 			fraction = i*scale - i1;
-			//IJ.write(i+" "+i1+" "+i2+" "+fraction);
 			reds[i] = (byte)((1.0-fraction)*(r[i1]&255) + fraction*(r[i2]&255));
 			greens[i] = (byte)((1.0-fraction)*(g[i1]&255) + fraction*(g[i2]&255));
 			blues[i] = (byte)((1.0-fraction)*(b[i1]&255) + fraction*(b[i2]&255));
 		}
 	}
 	
+	/** Opens a LUT and returns it as a LUT object. */
+	public static LUT openLut(String pathOrURL) {
+		FileInfo fi = new FileInfo();
+		fi.reds = new byte[256]; 
+		fi.greens = new byte[256]; 
+		fi.blues = new byte[256];
+		fi.lutSize = 256;
+		int nColors = 0;
+		if (pathOrURL.contains("://")) {
+			fi.url = pathOrURL;
+			fi.fileName = "";
+		} else {
+			OpenDialog od = new OpenDialog("Open LUT...", pathOrURL);
+			fi.directory = od.getDirectory();
+			fi.fileName = od.getFileName();
+			if (fi.fileName==null)
+				return null;
+		}
+		LutLoader loader = new LutLoader();
+		boolean ok = loader.openLut(fi);
+		if (ok)
+			return new LUT(fi.reds, fi.greens, fi.blues);
+		else
+			return null;
+	}
+	
 	/** Opens an NIH Image LUT, 768 byte binary LUT or text LUT from a file or URL. */
 	boolean openLut(FileInfo fi) {
-		//IJ.showStatus("Opening: " + fi.directory + fi.fileName);
+		//IJ.log("openLut: " + fi.directory + fi.fileName);
 		boolean isURL = fi.url!=null && !fi.url.equals("");
 		int length = 0;
+		String path = isURL?fi.url:fi.directory+fi.fileName;
 		if (!isURL) {
-			File f = new File(fi.directory + fi.fileName);
+			File f = new File(path);
 			length = (int)f.length();
 			if (length>10000) {
-				error();
+				error(path);
 				return false;
 			}
 		}
@@ -245,15 +274,15 @@ public class LutLoader extends ImagePlus implements PlugIn {
 			if (size==0 && length>768)
 				size = openTextLut(fi);
 			if (size==0)
-				error();
+				error(path);
 		} catch (IOException e) {
-			IJ.error(e.getMessage());
+			IJ.error("LUT Loader", ""+e);
 		}
 		return size==256;
 	}
 	
-	void error() {
-		IJ.error("This is not an ImageJ or NIH Image LUT, a 768 byte \nraw LUT, or a LUT in text format.");
+	private void error(String path) {
+		IJ.error("LUT Reader", "This is not an ImageJ or NIH Image LUT, a 768 byte \nraw LUT, or a LUT in text format.\n \n"+path);
 	}
 
 	/** Opens an NIH Image LUT or a 768 byte binary LUT. */
@@ -280,7 +309,6 @@ public class LutLoader extends ImagePlus implements PlugIn {
 			long fill2 = f.readLong();
 			int filler = f.readInt();
 		}
-		//IJ.write(id+" "+version+" "+nColors);
 		f.read(fi.reds, 0, nColors);
 		f.read(fi.greens, 0, nColors);
 		f.read(fi.blues, 0, nColors);

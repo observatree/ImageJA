@@ -43,7 +43,7 @@ public class ImageCalculator implements PlugIn {
 			else
 				titles[i] = "";
 		}
-		GenericDialog gd = new GenericDialog("Image Calculator", IJ.getInstance());
+		GenericDialog gd = new GenericDialog("Image Calculator");
 		String defaultItem;
 		if (title1.equals(""))
 			defaultItem = titles[0];
@@ -163,9 +163,13 @@ public class ImageCalculator implements PlugIn {
 			if (createWindow) params += " create";
 			if (floatResult) params += " 32-bit";
 			if (stackOp) params += " stack";
-			if (Recorder.scriptMode())
-				Recorder.recordCall("ic = new ImageCalculator();\nimp3 = ic.run(\""+params+"\", imp1, imp2);");
-			else
+			if (Recorder.scriptMode()) {
+				Recorder.recordCall("ImageCalculator", "ic = new ImageCalculator();");
+				Recorder.recordCall("ImagePlus", "imp1 = WindowManager.getImage(\""+img1.getTitle()+"\");");
+				Recorder.recordCall("ImagePlus", "imp2 = WindowManager.getImage(\""+img2.getTitle()+"\");");
+				Recorder.recordCall("ImagePlus", "imp3 = ic.run(\""+params+"\", imp1, imp2);");
+				Recorder.recordCall("imp3.show();");
+			} else
 				Recorder.record("imageCalculator", params, img1.getTitle(), img2.getTitle());
 			Recorder.setCommand(null); // don't record run(...)
 		}
@@ -193,6 +197,8 @@ public class ImageCalculator implements PlugIn {
 		ImageWindow win = img1.getWindow();
 		if (win!=null)
 			WindowManager.setCurrentWindow(win);
+		else if (Interpreter.isBatchMode() && !createWindow && WindowManager.getImage(img1.getID())!=null)
+			IJ.selectWindow(img1.getID());
 		Undo.reset();
 		ImageStack stack1 = img1.getStack();
 		StackProcessor sp = new StackProcessor(stack1, img1.getProcessor());
@@ -228,6 +234,8 @@ public class ImageCalculator implements PlugIn {
 			ImageWindow win = img1.getWindow();
 			if (win!=null)
 				WindowManager.setCurrentWindow(win);
+			else if (Interpreter.isBatchMode() && !createWindow && WindowManager.getImage(img1.getID())!=null)
+				IJ.selectWindow(img1.getID());
 			ip1.snapshot();
 			Undo.setup(Undo.FILTER, img1);
 		}

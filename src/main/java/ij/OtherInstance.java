@@ -34,8 +34,8 @@ import java.util.Properties;
  *
  *	@author Johannes Schindelin
  */
-
 public class OtherInstance {
+	private static final String DELIMETER = "~!~"; // Separates macro name and argument
 
 	interface ImageJInstance extends Remote {
 		void sendArgument(String arg) throws RemoteException;
@@ -45,19 +45,17 @@ public class OtherInstance {
 		int counter = 0;
 
 		public void sendArgument(String cmd) {
-			if (IJ.debugMode) IJ.log("SocketServer: command: \""+ cmd+"\"");
+			if (IJ.debugMode) IJ.log("SocketServer.sendArgument: \""+ cmd+"\"");
 			if (cmd.startsWith("open "))
 				(new Opener()).openAndAddToRecent(cmd.substring(5));
 			else if (cmd.startsWith("macro ")) {
 				String name = cmd.substring(6);
 				String name2 = name;
 				String arg = null;
-				if (name2.endsWith(")")) {
-					int index = name2.lastIndexOf("(");
-					if (index>0) {
-						name = name2.substring(0, index);
-						arg = name2.substring(index+1, name2.length()-1);
-					}
+				int index = name2.indexOf(DELIMETER);
+				if (index!=-1) {
+					name = name2.substring(0, index);
+					arg = name2.substring(index+DELIMETER.length(), name2.length());
 				}
 				IJ.runMacroFile(name, arg);
 			} else if (cmd.startsWith("run "))
@@ -126,25 +124,24 @@ public class OtherInstance {
 		if (!isRMIEnabled())
 			return false;
 		String file = getStubPath();
-		//IJ.log("sendArguments1: "+(args!=null&&args.length>0?args[0]:"null")+"  "+file);
-		if (args.length > 0) try {
-			//IJ.log("sendArguments2: "+args.length);
+		try {
 			FileInputStream in = new FileInputStream(file);
 			ImageJInstance instance = (ImageJInstance) new ObjectInputStream(in).readObject();
 			in.close();
-
-			//IJ.log("sendArguments3: "+instance);
+			if (instance==null)
+				return false;
 			instance.sendArgument("user.dir "+System.getProperty("user.dir"));
 			int macros = 0;
 			for (int i=0; i<args.length; i++) {
 				String arg = args[i];
-				if (arg==null) continue;
+				if (arg==null)
+					continue;
 				String cmd = null;
 				if (macros==0 && arg.endsWith(".ijm")) {
 					cmd = "macro " + arg;
 					macros++;
 				} else if (arg.startsWith("-macro") && i+1<args.length) {
-					String macroArg = i+2<args.length?"("+args[i+2]+")":"";
+					String macroArg = i+2<args.length?DELIMETER+args[i+2]:"";
 					cmd = "macro " + args[i+1] + macroArg;
 					instance.sendArgument(cmd);
 					break;
@@ -159,8 +156,6 @@ public class OtherInstance {
 				if (cmd!=null)
 					instance.sendArgument(cmd);
 			} // for
-
-			//IJ.log("sendArguments: return true");
 			return true;
 		} catch (Exception e) {
 			if (IJ.debugMode) {
@@ -180,7 +175,7 @@ public class OtherInstance {
 
 	public static void startServer() {
 		if (IJ.debugMode)
-			System.err.println("Starting server");
+			System.err.println("OtherInstance: starting server");
 		try {
 			implementation = new Implementation();
 			stub = (ImageJInstance)UnicastRemoteObject.exportObject(implementation, 0);
@@ -193,7 +188,7 @@ public class OtherInstance {
 			out.close();
 
 			if (IJ.debugMode)
-				System.err.println("Server ready");
+				System.err.println("OtherInstance: server ready");
 		} catch (Exception e) {
 			if (IJ.debugMode) {
 				System.err.println("Server exception: " + e);
@@ -222,7 +217,7 @@ public class OtherInstance {
 		if (s!=null) {
 			try {
 				return Integer.decode(s).intValue();
-			} catch (NumberFormatException e) {IJ.write(""+e);}
+			} catch (NumberFormatException e) {IJ.log(""+e);}
 		}
 		return -1;
 	}
@@ -242,13 +237,7 @@ public class OtherInstance {
 		String env = System.getenv("IJ_PREFS_DIR");
 		if (env != null)
 			return env;
-		if (IJ.isWindows())
-			return System.getProperty("user.dir");
-		String prefsDir = System.getProperty("user.home");
-		if (IJ.isMacOSX())
-			prefsDir += "/Library/Preferences";
 		else
-			prefsDir += "/.imagej";
-		return prefsDir;
+			return Prefs.getPrefsDir();
 	}
 }

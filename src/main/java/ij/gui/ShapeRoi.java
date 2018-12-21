@@ -7,7 +7,6 @@ import java.util.*;
 import ij.*;
 import ij.process.*;
 import ij.measure.*;
-import ij.plugin.frame.Recorder;
 import ij.plugin.filter.Analyzer;
 import ij.util.Tools;
 
@@ -223,6 +222,7 @@ public class ShapeRoi extends Roi {
 		setShape(new GeneralPath(at.createTransformedShape(a1)));
 		x = r.x;
 		y = r.y;
+		cachedMask = null;
 		return this;
 	}
 
@@ -438,7 +438,8 @@ public class ShapeRoi extends Roi {
 	 * @return an array of ij.gui.Roi objects.
 	 */
 	public Roi[] getRois () {
-		if (shape==null) return new Roi[0];
+		if (shape==null)
+			return new Roi[0];
 		if (savedRois!=null)
 			return getSavedRois();
 		Vector rois = new Vector();
@@ -594,8 +595,10 @@ public class ShapeRoi extends Roi {
 	/** Caculates "Feret" (maximum caliper width) and "MinFeret" (minimum caliper width). */	
 	public double[] getFeretValues() {
 		Roi[] rois = getRois();
-		if (rois!=null && rois.length==1)
+		if (rois!=null && rois.length==1) {
+			rois[0].setImage(imp);
 			return rois[0].getFeretValues();
+		}
 		double min=Double.MAX_VALUE, diameter=0.0, angle=0.0;
 		int p1=0, p2=0;
 		double pw=1.0, ph=1.0;
@@ -645,14 +648,18 @@ public class ShapeRoi extends Roi {
 	/**Returns the perimeter if this ShapeRoi can be decomposed 
 		into simple ROIs, otherwise returns zero. */
 	public double getLength() {
+		if (width==0 && height==0)
+			return 0.0;
 		double length = 0.0;
 		Roi[] rois = getRois();
 		ImagePlus imp2 = getImage();
 		if (rois!=null) {
 			for (int i=0; i<rois.length; i++) {
 				Roi roi = rois[i];
+				if (roi instanceof ShapeRoi)
+					return 0.0;
 				roi.setImage(imp2);
-				length += rois[i].getLength();
+				length += roi.getLength();
 				roi.setImage(null);
 			}
 		}
@@ -847,8 +854,9 @@ public class ShapeRoi extends Roi {
 	 * control points of the curves segments in the iteration order;
 	 * @return <strong><code>true</code></strong> if successful.*/
 	boolean parsePath(PathIterator pIter, double[] params, Vector segments, Vector rois, Vector handles) {
+		if (pIter==null || pIter.isDone())
+			return false;
 		boolean result = true;
-		if (pIter==null) return false;
 		double pw = 1.0, ph = 1.0;
 		if (imp!=null) {
 			Calibration cal = imp.getCalibration();
@@ -997,6 +1005,7 @@ public class ShapeRoi extends Roi {
 	public void draw(Graphics g) {
 		Color color =  strokeColor!=null? strokeColor:ROIColor;
 		boolean isActiveOverlayRoi = !overlay && isActiveOverlayRoi();
+		//IJ.log("draw: "+overlay+"  "+isActiveOverlayRoi);
 		if (isActiveOverlayRoi)
 			color = Color.cyan;
 		if (fillColor!=null) color = fillColor;
@@ -1004,7 +1013,7 @@ public class ShapeRoi extends Roi {
 		AffineTransform aTx = (((Graphics2D)g).getDeviceConfiguration()).getDefaultTransform();
 		Graphics2D g2d = (Graphics2D)g;
 		if (stroke!=null && !isActiveOverlayRoi)
-			g2d.setStroke(ic!=null&&ic.getCustomRoi()?stroke:getScaledStroke());
+			g2d.setStroke((ic!=null&&ic.getCustomRoi())||isCursor()?stroke:getScaledStroke());
 		mag = getMagnification();
 		int basex=0, basey=0;
 		if (ic!=null) {
@@ -1033,7 +1042,8 @@ public class ShapeRoi extends Roi {
 	public void drawRoiBrush(Graphics g) {
 		g.setColor(ROIColor);
 		int size = Toolbar.getBrushSize();
-		if (size==0) return;
+		if (size==0 || ic==null)
+			return;
 		int flags = ic.getModifiers();
 		if ((flags&16)==0) return; // exit if mouse button up
 		size = (int)(size*mag);
@@ -1074,16 +1084,10 @@ public class ShapeRoi extends Roi {
 	/** Returns this ROI's mask pixels as a ByteProcessor with pixels "in" the mask
 		set to white (255) and pixels "outside" the mask set to black (0). */
 	public ImageProcessor getMask() {
-		if(shape==null) return null;
+		if (shape==null)
+			return null;
 		if (cachedMask!=null && cachedMask.getPixels()!=null)
 			return cachedMask;
-		//Rectangle r = getBounds();
-		//if (r.x<0 || r.y<0) {
-		//	if (r.x<0) r.x = 0;
-		//	if (r.y<0) r.y = 0;
-		//	ShapeRoi clipRect = new ShapeRoi(new Roi(r.x,r.y,r.width,r.height));
-		//	setShape(getShape(this.or(clipRect)));
-		//}
 		BufferedImage bi = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
 		Graphics2D g2d = bi.createGraphics();
 		g2d.setColor(Color.white);
@@ -1092,6 +1096,7 @@ public class ShapeRoi extends Roi {
 		DataBufferByte buffer = (DataBufferByte)raster.getDataBuffer();		
 		byte[] mask = buffer.getData();
 		cachedMask = new ByteProcessor(width, height, mask, null);
+		cachedMask.setThreshold(255,255,ImageProcessor.NO_LUT_UPDATE);
         return cachedMask;
 	}
 
@@ -1164,6 +1169,11 @@ public class ShapeRoi extends Roi {
 			return rois[0].getFloatPolygon();
 		else
 			return super.getFloatPolygon();
+	}
+
+	/** If this ROI consists of a single polygon, retuns the number of vertices, otherwise returns 4. */
+	public int size() {
+		return getPolygon().npoints;
 	}
 
 }

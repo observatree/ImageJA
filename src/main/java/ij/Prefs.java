@@ -53,7 +53,10 @@ public class Prefs {
 	public static final String vistaHint = "";  // no longer used
 
 	private static final int USE_SYSTEM_PROXIES=1<<0, USE_FILE_CHOOSER=1<<1,
-		SUBPIXEL_RESOLUTION=1<<2;
+		SUBPIXEL_RESOLUTION=1<<2, ENHANCED_LINE_TOOL=1<<3, SKIP_RAW_DIALOG=1<<4,
+		REVERSE_NEXT_PREVIOUS_ORDER=1<<5, AUTO_RUN_EXAMPLES=1<<6, SHOW_ALL_POINTS=1<<7,
+		DO_NOT_SAVE_WINDOW_LOCS=1<<8, JFILE_CHOOSER_CHANGED=1<<9,
+		CANCEL_BUTTON_ON_RIGHT=1<<10;
 	public static final String OPTIONS2 = "prefs.options2";
     
 	/** file.separator system property */
@@ -82,11 +85,11 @@ public class Prefs {
 	public static boolean requireControlKey;
 	/** Open 8-bit images with inverting LUT so 0 is white and 255 is black. */
 	public static boolean useInvertingLut;
-	/** Draw tool icons using antialiasing. */
+	/** Draw tool icons using antialiasing (always true). */
 	public static boolean antialiasedTools = true;
 	/** Export TIFF and Raw using little-endian byte order. */
 	public static boolean intelByteOrder;
-	/** Double buffer display of selections and overlays. */
+	/** No longer used */
 	public static boolean doubleBuffer = true;
 	/** Do not label multiple points created using point tool. */
 	public static boolean noPointLabels;
@@ -104,6 +107,8 @@ public class Prefs {
 	public static boolean moveToMisc;
 	/** Add points to ROI Manager. */
 	public static boolean pointAddToManager;
+	/** Add points to overlay. */
+	public static boolean pointAddToOverlay;
 	/** Extend the borders to foreground for binary erosions and closings. */
 	public static boolean padEdges;
 	/** Run the SocketListener. */
@@ -138,9 +143,45 @@ public class Prefs {
 	public static boolean useFileChooser;
 	/** Use sub-pixel resolution with line selections */
 	public static boolean subPixelResolution;
-	/** Adjust contrast when scrolling stacks (or hold shift key down) */
+	/** Adjust contrast when scrolling stacks */
 	public static boolean autoContrast;
+	/** Allow lines to be created with one click at start and another at the end */
+	public static boolean enhancedLineTool;
+	/** Keep arrow selection after adding to overlay */
+	public static boolean keepArrowSelections;
+	/** Aways paint images using double buffering */
+	public static boolean paintDoubleBuffered;
+	/** Do not display dialog when opening .raw files */
+	public static boolean skipRawDialog;
+	/** Reverse channel-slice-frame priority used by Next Slice and Previous Slice commands. */
+	public static boolean reverseNextPreviousOrder;
+	/** Automatically run examples in Help/Examples menu. */
+	public static boolean autoRunExamples = true;
+	/** Ignore stack positions when displaying points. */
+	public static boolean showAllPoints;
+	/** Set MenuBar on Macs running Java 8. */
+	public static boolean setIJMenuBar = IJ.isMacOSX();
+	/** "ImageJ" window is always on top. */
+	public static boolean alwaysOnTop;
+	/** Automatically spline fit line selections */
+	public static boolean splineFitLines;
+	/** Enable this option to workaround a bug with some Linux window
+		managers that causes windows to wander down the screen. */
+	public static boolean doNotSaveWindowLocations = true;
+	/** Use JFileChooser setting changed/ */
+	public static boolean jFileChooserSettingChanged;
+	/** Convert tiff units to microns if pixel width is less than 0.0001 cm. */
+	public static boolean convertToMicrons = true;
+	/** Wand tool "Smooth if thresholded" option */
+	public static boolean smoothWand;
+	/** "Close All" command running */
+	public static boolean closingAll;
+	/** Dialog "Cancel" button is on right on Linux */
+	public static boolean dialogCancelButtonOnRight;
+	/** Support TRANSFORM Undo in macros */
+	public static boolean supportMacroUndo;
 
+	static boolean commandLineMacro;
 	public static Properties ijPrefs = new Properties();
 	static Properties props = new Properties(ijPrefs);
 	static String prefsDir;
@@ -148,7 +189,6 @@ public class Prefs {
 	static String homeDir; // ImageJ folder
 	static int threads;
 	static int transparentIndex = -1;
-	static boolean commandLineMacro;
 	private static boolean resetPreferences;
 
 	/** Finds and loads the ImageJ configuration file, "IJ_Props.txt".
@@ -160,12 +200,6 @@ public class Prefs {
 			return loadAppletProps(f, applet);
 		if (homeDir==null)
 			homeDir = System.getProperty("user.dir");
-		String userHome = System.getProperty("user.home");
-		prefsDir = userHome; // User's home directory
-		if (IJ.isMacOSX())
-			prefsDir += "/Library/Preferences";
-		else
-			prefsDir += File.separator+".astroimagej";
 		if (f==null) {
 			try {f = new FileInputStream(homeDir+"/"+PROPS_NAME);}
 			catch (FileNotFoundException e) {f=null;}
@@ -219,14 +253,32 @@ public class Prefs {
 		imagesURL = url;
 	}
 
-	/** Returns the path to the ImageJ directory. */
+	/** Obsolete, replaced by getImageJDir(), which, unlike this method, 
+		returns a path that ends with File.separator. */
 	public static String getHomeDir() {
 		return homeDir;
 	}
 
-	/** Gets the path to the directory where the 
+	/** Returns the path, ending in File.separator, to the ImageJ directory. */
+	public static String getImageJDir() {
+		String path = Menus.getImageJPath();
+		if (path==null)
+			return homeDir + File.separator;
+		else
+			return path;
+	}
+
+	/** Returns the path to the directory where the 
 		preferences file (IJPrefs.txt) is saved. */
 	public static String getPrefsDir() {
+		if (prefsDir==null) {
+			String dir = System.getProperty("user.home");
+			if (IJ.isMacOSX())
+				dir += "/Library/Preferences";
+			else
+				dir += File.separator+".astroimagej";
+			prefsDir = dir;
+		}
 		return prefsDir;
 	}
 
@@ -279,7 +331,7 @@ public class Prefs {
 		if (s!=null) {
 			try {
 				return Integer.decode(s).intValue();
-			} catch (NumberFormatException e) {IJ.write(""+e);}
+			} catch (NumberFormatException e) {IJ.log(""+e);}
 		}
 		return defaultValue;
 	}
@@ -314,7 +366,7 @@ public class Prefs {
 
 	/** Opens the IJ_Prefs.txt file. */
 	static void loadPreferences() {
-		String path = prefsDir+separator+PREFS_NAME;
+		String path = getPrefsDir()+separator+PREFS_NAME;
 		boolean ok =  loadPrefs(path);
 		if (!ok) { // not found
 			if (IJ.isWindows())
@@ -357,6 +409,7 @@ public class Prefs {
 			prefs.put(NOISE_SD, Double.toString(Filters.getSD()));
 			if (threads>1) prefs.put(THREADS, Integer.toString(threads));
 			if (IJ.isMacOSX()) useJFileChooser = false;
+			if (!IJ.isLinux()) dialogCancelButtonOnRight = false;
 			saveOptions(prefs);
 			savePluginPrefs(prefs);
 			IJ.getInstance().savePreferences(prefs);
@@ -366,13 +419,17 @@ public class Prefs {
 			ImportDialog.savePreferences(prefs);
 			PlotWindow.savePreferences(prefs);
 			NewImage.savePreferences(prefs);
+			String prefsDir = getPrefsDir();
 			path = prefsDir+separator+PREFS_NAME;
 			if (prefsDir.endsWith(".astroimagej")) {
 				File f = new File(prefsDir);
 				if (!f.exists()) f.mkdir(); // create .imagej directory
 			}
 			if (resetPreferences) {
-				new File(path).delete();
+				File f = new File(path);
+				if (!f.exists())
+					IJ.error("Edit>Options>Reset", "Unable to reset preferences. File not found at\n"+path);
+				boolean rtn = f.delete();
 				resetPreferences = false;
 			} else
 				savePrefs(prefs, path);
@@ -393,14 +450,13 @@ public class Prefs {
 	}
 
 	static void loadOptions() {
-		int defaultOptions = ANTIALIASING+AVOID_RESLICE_INTERPOLATION+ANTIALIASED_TOOLS
-			+(!IJ.isMacOSX()?RUN_SOCKET_LISTENER:0);
+		int defaultOptions = ANTIALIASING+AVOID_RESLICE_INTERPOLATION+ANTIALIASED_TOOLS+MULTI_POINT_MODE
+			+(!IJ.isMacOSX()?RUN_SOCKET_LISTENER:0)+BLACK_BACKGROUND;
 		int options = getInt(OPTIONS, defaultOptions);
 		usePointerCursor = (options&USE_POINTER)!=0;
 		//antialiasedText = (options&ANTIALIASING)!=0;
 		antialiasedText = false;
 		interpolateScaledImages = (options&INTERPOLATE)!=0;
-		open100Percent = (options&ONE_HUNDRED_PERCENT)!=0;
 		open100Percent = (options&ONE_HUNDRED_PERCENT)!=0;
 		blackBackground = (options&BLACK_BACKGROUND)!=0;
 		useJFileChooser = (options&JFILE_CHOOSER)!=0;
@@ -408,25 +464,21 @@ public class Prefs {
 		if (weightedColor)
 			ColorProcessor.setWeightingFactors(0.299, 0.587, 0.114);
 		blackCanvas = (options&BLACK_CANVAS)!=0;
-		pointAutoMeasure = (options&AUTO_MEASURE)!=0;
 		requireControlKey = (options&REQUIRE_CONTROL)!=0;
 		useInvertingLut = (options&USE_INVERTING_LUT)!=0;
 		antialiasedTools = (options&ANTIALIASED_TOOLS)!=0;
 		intelByteOrder = (options&INTEL_BYTE_ORDER)!=0;
-		// doubleBuffer = (options&DOUBLE_BUFFER)!=0; // always double buffer
-		//noPointLabels = (options&NO_POINT_LABELS)!=0;
 		noBorder = (options&NO_BORDER)!=0;
 		showAllSliceOnly = (options&SHOW_ALL_SLICE_ONLY)!=0;
 		copyColumnHeaders = (options&COPY_HEADERS)!=0;
 		noRowNumbers = (options&NO_ROW_NUMBERS)!=0;
 		moveToMisc = (options&MOVE_TO_MISC)!=0;
-		pointAddToManager = (options&ADD_TO_MANAGER)!=0;
 		runSocketListener = (options&RUN_SOCKET_LISTENER)!=0;
 		multiPointMode = (options&MULTI_POINT_MODE)!=0;
 		rotateYZ = (options&ROTATE_YZ)!=0;
 		flipXZ = (options&FLIP_XZ)!=0;
-		dontSaveHeaders = (options&DONT_SAVE_HEADERS)!=0;
-		dontSaveRowNumbers = (options&DONT_SAVE_ROW_NUMBERS)!=0;
+		//dontSaveHeaders = (options&DONT_SAVE_HEADERS)!=0;
+		//dontSaveRowNumbers = (options&DONT_SAVE_ROW_NUMBERS)!=0;
 		noClickToGC = (options&NO_CLICK_TO_GC)!=0;
 		avoidResliceInterpolation = (options&AVOID_RESLICE_INTERPOLATION)!=0;
 		keepUndoBuffers = (options&KEEP_UNDO_BUFFERS)!=0;
@@ -436,6 +488,14 @@ public class Prefs {
 		useSystemProxies = (options2&USE_SYSTEM_PROXIES)!=0;
 		useFileChooser = (options2&USE_FILE_CHOOSER)!=0;
 		subPixelResolution = (options2&SUBPIXEL_RESOLUTION)!=0;
+		enhancedLineTool = (options2&ENHANCED_LINE_TOOL)!=0;
+		skipRawDialog = (options2&SKIP_RAW_DIALOG)!=0;
+		reverseNextPreviousOrder = (options2&REVERSE_NEXT_PREVIOUS_ORDER)!=0;
+		autoRunExamples = (options2&AUTO_RUN_EXAMPLES)!=0;
+		showAllPoints = (options2&SHOW_ALL_POINTS)!=0;
+		doNotSaveWindowLocations = (options2&DO_NOT_SAVE_WINDOW_LOCS)!=0;
+		jFileChooserSettingChanged = (options2&JFILE_CHOOSER_CHANGED)!=0;
+		dialogCancelButtonOnRight = (options2&CANCEL_BUTTON_ON_RIGHT)!=0;
 	}
 
 	static void saveOptions(Properties prefs) {
@@ -443,13 +503,13 @@ public class Prefs {
 			+ (interpolateScaledImages?INTERPOLATE:0) + (open100Percent?ONE_HUNDRED_PERCENT:0)
 			+ (blackBackground?BLACK_BACKGROUND:0) + (useJFileChooser?JFILE_CHOOSER:0)
 			+ (blackCanvas?BLACK_CANVAS:0) + (weightedColor?WEIGHTED:0) 
-			+ (pointAutoMeasure?AUTO_MEASURE:0) + (requireControlKey?REQUIRE_CONTROL:0)
+			+ (requireControlKey?REQUIRE_CONTROL:0)
 			+ (useInvertingLut?USE_INVERTING_LUT:0) + (antialiasedTools?ANTIALIASED_TOOLS:0)
 			+ (intelByteOrder?INTEL_BYTE_ORDER:0) + (doubleBuffer?DOUBLE_BUFFER:0)
 			+ (noPointLabels?NO_POINT_LABELS:0) + (noBorder?NO_BORDER:0)
 			+ (showAllSliceOnly?SHOW_ALL_SLICE_ONLY:0) + (copyColumnHeaders?COPY_HEADERS:0)
 			+ (noRowNumbers?NO_ROW_NUMBERS:0) + (moveToMisc?MOVE_TO_MISC:0)
-			+ (pointAddToManager?ADD_TO_MANAGER:0) + (runSocketListener?RUN_SOCKET_LISTENER:0)
+			+ (runSocketListener?RUN_SOCKET_LISTENER:0)
 			+ (multiPointMode?MULTI_POINT_MODE:0) + (rotateYZ?ROTATE_YZ:0)
 			+ (flipXZ?FLIP_XZ:0) + (dontSaveHeaders?DONT_SAVE_HEADERS:0)
 			+ (dontSaveRowNumbers?DONT_SAVE_ROW_NUMBERS:0) + (noClickToGC?NO_CLICK_TO_GC:0)
@@ -458,7 +518,13 @@ public class Prefs {
 		prefs.put(OPTIONS, Integer.toString(options));
 
 		int options2 = (useSystemProxies?USE_SYSTEM_PROXIES:0)
-			+ (useFileChooser?USE_FILE_CHOOSER:0) + (subPixelResolution?SUBPIXEL_RESOLUTION:0);
+			+ (useFileChooser?USE_FILE_CHOOSER:0) + (subPixelResolution?SUBPIXEL_RESOLUTION:0)
+			+ (enhancedLineTool?ENHANCED_LINE_TOOL:0) + (skipRawDialog?SKIP_RAW_DIALOG:0)
+			+ (reverseNextPreviousOrder?REVERSE_NEXT_PREVIOUS_ORDER:0)
+			+ (autoRunExamples?AUTO_RUN_EXAMPLES:0) + (showAllPoints?SHOW_ALL_POINTS:0)
+			+ (doNotSaveWindowLocations?DO_NOT_SAVE_WINDOW_LOCS:0)
+			+ (jFileChooserSettingChanged?JFILE_CHOOSER_CHANGED:0)
+			+ (dialogCancelButtonOnRight?CANCEL_BUTTON_ON_RIGHT:0);
 		prefs.put(OPTIONS2, Integer.toString(options2));
 	}
 
@@ -468,7 +534,10 @@ public class Prefs {
 	public static void set(String key, String text) {
 		if (key.indexOf('.')<1)
 			throw new IllegalArgumentException("Key must have a prefix");
-		ijPrefs.put(KEY_PREFIX+key, text);
+		if (text==null)
+			ijPrefs.remove(KEY_PREFIX+key);
+		else
+			ijPrefs.put(KEY_PREFIX+key, text);
 	}
 
 	/** Saves <code>value</code> in the preferences file using 
@@ -532,7 +601,8 @@ public class Prefs {
 	/** Saves the Point <code>loc</code> in the preferences
 		 file as a string using the keyword <code>key</code>. */
 	public static void saveLocation(String key, Point loc) {
-		set(key, loc.x+","+loc.y);
+		if (!doNotSaveWindowLocations)
+			set(key, loc.x+","+loc.y);
 	}
 
 	/** Uses the keyword <code>key</code> to retrieve a location
@@ -548,7 +618,11 @@ public class Prefs {
 		double yloc = Tools.parseDouble(value.substring(index+1));
 		if (Double.isNaN(yloc)) return null;
 		Point p = new Point((int)xloc, (int)yloc);
-		//Dimension screen = IJ.getScreenSize();
+		Dimension screen = null;
+		if (IJ.debugMode)
+			screen = Toolkit.getDefaultToolkit().getScreenSize();
+		else
+			screen = IJ.getScreenSize();
 		if (!isLocationOnScreen(p))
 			return null;
 		else
@@ -586,12 +660,13 @@ public class Prefs {
 		bos.close();
 	}
 	
-	/** Returns the number of threads used by PlugInFilters to process stacks. */
+	/** Returns the number of threads used by PlugInFilters to process images and stacks. */
 	public static int getThreads() {
 		if (threads==0) {
 			threads = getInt(THREADS, 0);
 			int processors = Runtime.getRuntime().availableProcessors();
-			if (threads<1 || threads>processors) threads = processors;
+			if (threads<1 || threads>processors)
+				threads = processors;
 		}
 		return threads;
 	}
@@ -599,7 +674,6 @@ public class Prefs {
 	/** Sets the number of threads (1-32) used by PlugInFilters to process stacks. */
 	public static void setThreads(int n) {
 		if (n<1) n = 1;
-		if (n>32) n = 32;
 		threads = n;
 	}
 	
@@ -618,5 +692,9 @@ public class Prefs {
 		return ijPrefs;
 	}
 	
+	public static String defaultResultsExtension() {
+		return get("options.ext", ".csv");
+	}
+		
 }
 

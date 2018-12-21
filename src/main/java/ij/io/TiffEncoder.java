@@ -26,6 +26,8 @@ public class TiffEncoder {
 	private int scaleSize;
 	private boolean littleEndian = ij.Prefs.intelByteOrder;
 	private byte buffer[] = new byte[8];
+	private int colorMapSize = 0;
+
 		
 	public TiffEncoder (FileInfo fi) {
 		this.fi = fi;
@@ -35,7 +37,6 @@ public class TiffEncoder {
 		nEntries = 9;
 		int bytesPerPixel = 1;
 		int bpsSize = 0;
-		int colorMapSize = 0;
 
 		switch (fi.fileType) {
 			case FileInfo.GRAY8:
@@ -45,11 +46,19 @@ public class TiffEncoder {
 			case FileInfo.GRAY16_SIGNED:
 				bitsPerSample = 16;
 				photoInterp = fi.whiteIsZero?0:1;
+				if (fi.lutSize>0) {
+					nEntries = 10;
+					colorMapSize = MAP_SIZE*2;
+				}
 				bytesPerPixel = 2;
 				break;
 			case FileInfo.GRAY32_FLOAT:
 				bitsPerSample = 32;
 				photoInterp = fi.whiteIsZero?0:1;
+				if (fi.lutSize>0) {
+					nEntries = 10;
+					colorMapSize = MAP_SIZE*2;
+				}
 				bytesPerPixel = 4;
 				break;
 			case FileInfo.RGB:
@@ -103,8 +112,9 @@ public class TiffEncoder {
 		long nextIFD = 0L;
 		if (fi.nImages>1)
 			nextIFD = imageOffset+stackSize;
-        if (nextIFD+fi.nImages*ifdSize>=0xffffffffL)
-            nextIFD = 0L;
+		boolean bigTiff = nextIFD+fi.nImages*ifdSize>=0xffffffffL;
+		if (bigTiff)
+			nextIFD = 0L;
 		writeIFD(out, (int)imageOffset, (int)nextIFD);
 		if (fi.fileType==FileInfo.RGB||fi.fileType==FileInfo.RGB48)
 			writeBitsPerPixel(out);
@@ -112,7 +122,7 @@ public class TiffEncoder {
 			writeDescription(out);
 		if (scaleSize>0)
 			writeScale(out);
-		if (fi.fileType==FileInfo.COLOR8)
+		if (colorMapSize>0)
 			writeColorMap(out);
 		if (metaDataSize>0)
 			writeMetaData(out);
@@ -132,7 +142,8 @@ public class TiffEncoder {
 				imageOffset += imageSize;
 				writeIFD(out, (int)imageOffset, (int)nextIFD);
 			}
-		}
+		} else if (bigTiff)
+				ij.IJ.log("Stack is larger than 4GB. Most TIFF readers will only open the first image. Use this information to open as raw:\n"+fi);
 	}
 	
 	public void write(DataOutputStream out) throws IOException {
@@ -140,7 +151,6 @@ public class TiffEncoder {
 	}
 
 	int getMetaDataSize() {
-        //if (stackSize+IMAGE_START>0xffffffffL) return 0;
 		nSliceLabels = 0;
 		nMetaDataEntries = 0;
 		int size = 0;
@@ -183,6 +193,12 @@ public class TiffEncoder {
             }
 			nTypes++;
 			nMetaDataEntries += fi.channelLuts.length;
+		}
+
+		if (fi.plot!=null) {
+			nMetaDataEntries++;
+			size += fi.plot.length;
+			nTypes++;
 		}
 
 		if (fi.roi!=null) {
@@ -290,7 +306,7 @@ public class TiffEncoder {
 			int format = TiffDecoder.FLOATING_POINT;
 			writeEntry(out, TiffDecoder.SAMPLE_FORMAT, 3, 1, format);
 		}
-		if (fi.fileType==FileInfo.COLOR8) {
+		if (colorMapSize>0) {
 			writeEntry(out, TiffDecoder.COLOR_MAP, 3, MAP_SIZE, tagDataOffset);
 			tagDataOffset += MAP_SIZE*2;
 		}
@@ -315,7 +331,8 @@ public class TiffEncoder {
 		double xscale = 1.0/fi.pixelWidth;
 		double yscale = 1.0/fi.pixelHeight;
 		double scale = 1000000.0;
-		if (xscale>1000.0) scale = 1000.0;
+		if (xscale*scale>Integer.MAX_VALUE||yscale*scale>Integer.MAX_VALUE)
+			scale = (int)(Integer.MAX_VALUE/Math.max(xscale,yscale));
 		writeInt(out, (int)(xscale*scale));
 		writeInt(out, (int)scale);
 		writeInt(out, (int)(yscale*scale));
@@ -361,6 +378,8 @@ public class TiffEncoder {
 			for (int i=0; i<fi.channelLuts.length; i++)
 				writeInt(out, fi.channelLuts[i].length);
 		}
+		if (fi.plot!=null)
+			writeInt(out, fi.plot.length);
 		if (fi.roi!=null)
 			writeInt(out, fi.roi.length);
 		if (fi.overlay!=null) {
@@ -387,6 +406,10 @@ public class TiffEncoder {
 		if (fi.channelLuts!=null) {
 			writeInt(out, TiffDecoder.LUTS); // type="luts"
 			writeInt(out, fi.channelLuts.length); // count
+		}
+		if (fi.plot!=null) {
+			writeInt(out, TiffDecoder.PLOT); // type="plot"
+			writeInt(out, 1); // count
 		}
 		if (fi.roi!=null) {
 			writeInt(out, TiffDecoder.ROI); // type="roi "
@@ -416,6 +439,8 @@ public class TiffEncoder {
 			for (int i=0; i<fi.channelLuts.length; i++)
 				out.write(fi.channelLuts[i]);
 		}
+		if (fi.plot!=null)
+			out.write(fi.plot);
 		if (fi.roi!=null)
 			out.write(fi.roi);
 		if (fi.overlay!=null) {

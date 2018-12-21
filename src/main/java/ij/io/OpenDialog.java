@@ -22,6 +22,11 @@ import javax.swing.filechooser.*;
 	private static String lastDir, lastName;
 
 	
+	/** Displays a file open dialog with 'title' as the title. */
+	public OpenDialog(String title) {
+		this(title, null);
+	}
+
 	/** Displays a file open dialog with 'title' as
 		the title. If 'path' is non-blank, it is
 		used and the dialog is not displayed. Uses
@@ -145,6 +150,13 @@ import javax.swing.filechooser.*;
 			if (sharedFrame==null) sharedFrame = new Frame();
 			parent = sharedFrame;
 		}
+		if (IJ.isMacOSX() && IJ.isJava18()) {
+			ImageJ ij = IJ.getInstance();
+			if (ij!=null && ij.isActive())
+				parent = ij;
+			else
+				parent = null;
+		}
 		FileDialog fd = new FileDialog(parent, title);
 		if (path!=null)
 			fd.setDirectory(path);
@@ -190,6 +202,14 @@ import javax.swing.filechooser.*;
 		return name;
 	}
 		
+	/** Returns the selected file path or null if the dialog was canceled. */
+	public String getPath() {
+		if (getFileName()==null)
+			return null;
+		else return
+			getDirectory() + getFileName();
+	}
+
 	/** Returns the current working directory, which may be null. The
 		returned string always ends with the separator character ("/" or "\").*/
 	public static String getDefaultDirectory() {
@@ -201,13 +221,12 @@ import javax.swing.filechooser.*;
 	/** Sets the current working directory. */
 	public static void setDefaultDirectory(String defaultDir) {
 		defaultDirectory = defaultDir;
-		if (!defaultDirectory.endsWith(File.separator))
+		if (defaultDirectory!=null && !defaultDirectory.endsWith(File.separator) && !defaultDirectory.endsWith("/"))
 			defaultDirectory = defaultDirectory + File.separator;
 	}
 	
-	/** Returns the path to the last directory opened by the user
-		using a file open or file save dialog, or using drag and drop. 
-		Returns null if the users has not opened a file. */
+	/** Returns the path to the directory that contains the last file
+		 opened, or null if a file has not been opened. */
 	public static String getLastDirectory() {
 		return lastDir;
 	}

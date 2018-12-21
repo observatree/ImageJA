@@ -79,7 +79,10 @@ import java.awt.image.*;
 		}
 		ip.drawString(text[6], ip.getWidth()-ip.getStringWidth(text[6])-10, ip.getHeight()-3);
 		ImageWindow.centerNextImage();
-		new ImagePlus("About AstroImageJ", ip).show();
+		ImagePlus imp = new ImagePlus("About AstroImageJ", ip);
+		String info = text[0] +"\n" + text[4] +"\n" + text[5];
+		imp.setProperty("Info", info);
+		imp.show();
 	}
 
 	int x(String text, ImageProcessor ip, int max) {

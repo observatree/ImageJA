@@ -17,10 +17,15 @@ import java.util.*;
 public class Slicer implements PlugIn, TextListener, ItemListener {
 
 	private static final String[] starts = {"Top", "Left", "Bottom", "Right"};
-	private static String startAt = starts[0];
-	private static boolean rotate;
-	private static boolean flip;
-	private static int sliceCount = 1;
+	private static String startAtS = starts[0];
+	private static boolean rotateS;
+	private static boolean flipS;
+	private static int sliceCountS = 1;
+	
+	private String startAt = starts[0];
+	private boolean rotate;
+	private boolean flip;
+	private int sliceCount = 1;
 	private boolean nointerpolate = Prefs.avoidResliceInterpolation;
 	private double inputZSpacing = 1.0;
 	private double outputZSpacing = 1.0;
@@ -169,10 +174,8 @@ public class Slicer implements PlugIn, TextListener, ItemListener {
 		int channels = imp.getNChannels();
 		int slices = imp.getNSlices();
 		int frames = imp.getNFrames();
-		if (slices==1) {
-			IJ.error("Reslice...", "Cannot reslice z=1 hyperstacks");
-			return null;
-		}
+		if (slices==1)
+			return resliceTimeLapseHyperstack(imp);
 		int c1 = imp.getChannel();
 		int z1 = imp.getSlice();
 		int t1 = imp.getFrame();
@@ -213,6 +216,47 @@ public class Slicer implements PlugIn, TextListener, ItemListener {
 		return imp2;
 	}
 
+	ImagePlus resliceTimeLapseHyperstack(ImagePlus imp) {
+		int channels = imp.getNChannels();
+		int frames = imp.getNFrames();
+		int c1 = imp.getChannel();
+		int t1 = imp.getFrame();
+		int width = imp.getWidth();
+		int height = imp.getHeight();
+		ImagePlus imp2 = null;
+		ImageStack stack2 = null;
+		Roi roi = imp.getRoi();
+		int z = 1;
+		for (int c=1; c<=channels; c++) {
+			ImageStack tmp1Stack = new ImageStack(width, height);
+			for (int t=1; t<=frames; t++) {
+				imp.setPositionWithoutUpdate(c, z, t);
+				tmp1Stack.addSlice(null, imp.getProcessor());
+			}
+			ImagePlus tmp1 = new ImagePlus("tmp", tmp1Stack);
+			tmp1.setCalibration(imp.getCalibration());
+			tmp1.setRoi(roi);
+			ImagePlus tmp2 = reslice(tmp1);
+			int frames2 = tmp2.getStackSize();
+			if (imp2==null) {
+				imp2 = tmp2.createHyperStack("Reslice of "+imp.getTitle(), channels, 1, frames2, tmp2.getBitDepth());
+				stack2 = imp2.getStack();
+			}
+			ImageStack tmp2Stack = tmp2.getStack();
+			for (int t=1; t<=frames2; t++) {
+				imp.setPositionWithoutUpdate(c, z, t);
+				int n2 = imp2.getStackIndex(c, z, t);
+				stack2.setPixels(tmp2Stack.getPixels(z), n2);
+			}
+		}
+		imp.setPosition(c1, 1, t1);
+		if (channels>1 && imp.isComposite()) {
+			imp2 = new CompositeImage(imp2, ((CompositeImage)imp).getMode());
+			((CompositeImage)imp2).copyLuts(imp);
+		}
+		return imp2;
+	}
+
 	boolean showDialog(ImagePlus imp) {
 		Calibration cal = imp.getCalibration();
 		if (cal.pixelDepth<0.0)
@@ -226,12 +270,18 @@ public class Slicer implements PlugIn, TextListener, ItemListener {
 		boolean line = roi!=null && roi.getType()==Roi.LINE;
 		if (line) saveLineInfo(roi);
 		String macroOptions = Macro.getOptions();
-		if (macroOptions!=null) {
+		boolean macroRunning = macroOptions!=null;
+		if (macroRunning) {
 			if (macroOptions.indexOf("input=")!=-1)
 				macroOptions = macroOptions.replaceAll("slice=", "slice_count=");
 			macroOptions = macroOptions.replaceAll("slice=", "output=");
 			Macro.setOptions(macroOptions);
 			nointerpolate = false;
+		} else {
+			startAt = startAtS;
+			rotate = rotateS;
+			flip = flipS;
+			sliceCount = sliceCountS;
 		}
 		GenericDialog gd = new GenericDialog("Reslice");
 		gd.addNumericField("Output spacing ("+units+"):", outputSpacing, 3);
@@ -251,20 +301,18 @@ public class Slicer implements PlugIn, TextListener, ItemListener {
 		gd.setInsets(5, 0, 0);
 		gd.addMessage("Output size: "+getSize(cal.pixelDepth,outputSpacing,outputSlices)+"				");
 		fields = gd.getNumericFields();
-		if (!IJ.macroRunning()) {
+		if (!macroRunning) {
 			for (int i=0; i<fields.size(); i++)
 				((TextField)fields.elementAt(i)).addTextListener(this);
 		}
 		checkboxes = gd.getCheckboxes();
-		if (!IJ.macroRunning())
+		if (!macroRunning)
 			((Checkbox)checkboxes.elementAt(2)).addItemListener(this);
 		message = (Label)gd.getMessage();
-        gd.addHelp(IJ.URL+"/docs/menus/image.html#reslice");
+		gd.addHelp(IJ.URL+"/docs/menus/image.html#reslice");
 		gd.showDialog();
 		if (gd.wasCanceled())
 			return false;
-		//inputZSpacing = gd.getNextNumber();
-		//if (cal.pixelDepth==0.0) cal.pixelDepth = 1.0;
 		outputZSpacing = gd.getNextNumber()/cal.pixelWidth;
 		if (line) {
 			outputSlices = (int)gd.getNextNumber();
@@ -275,8 +323,13 @@ public class Slicer implements PlugIn, TextListener, ItemListener {
 		flip = gd.getNextBoolean();
 		rotate = gd.getNextBoolean();
 		nointerpolate = gd.getNextBoolean();
-		if (!IJ.isMacro())
+		if (!macroRunning) {
 			Prefs.avoidResliceInterpolation = nointerpolate;
+			startAtS = startAt;
+			rotateS = rotate;
+			flipS = flip;
+			sliceCountS = sliceCount;
+		}
 		return true;
 	}
 	
@@ -487,8 +540,6 @@ public class Slicer implements PlugIn, TextListener, ItemListener {
 				double ry = ybase+y[i]+start*yinc;
 				double len2 = len - start;
 				int n2 = (int)len2;
-				//double d=0;;
-				//IJ.write("new segment: "+IJ.d2s(xinc)+" "+IJ.d2s(yinc)+" "+IJ.d2s(len)+" "+IJ.d2s(len2)+" "+IJ.d2s(n2)+" "+IJ.d2s(leftOver));
 				for (int j=0; j<=n2; j++) {
 					index = (int)distance+j;
 					if (index<values.length) {

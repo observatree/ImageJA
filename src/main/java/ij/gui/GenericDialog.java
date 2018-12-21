@@ -32,82 +32,88 @@ import ij.macro.*;
  *   }
  * }
  * </pre>
-* To work with macros, the first word of each component label must be 
-* unique. If this is not the case, add underscores, which will be converted  
+* To work with macros, the first word of each component label must be
+* unique. If this is not the case, add underscores, which will be converted
 * to spaces when the dialog is displayed. For example, change the checkbox labels
 * "Show Quality" and "Show Residue" to "Show_Quality" and "Show_Residue".
 */
-public class GenericDialog extends Dialog implements ActionListener, TextListener, 
+public class GenericDialog extends Dialog implements ActionListener, TextListener,
 FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 
-	public static final int MAX_SLIDERS = 25;
-	protected Vector numberField, stringField, checkbox, choice, slider;
+	protected Vector numberField, stringField, checkbox, choice, slider, radioButtonGroups;
 	protected TextArea textArea1, textArea2;
-	protected Vector defaultValues,defaultText;
+	protected Vector defaultValues,defaultText,defaultStrings,defaultChoiceIndexes;
 	protected Component theLabel;
 	private Button cancel, okay, no, help;
 	private String okLabel = "  OK  ";
 	private String cancelLabel = "Cancel";
 	private String helpLabel = "Help";
-    private boolean wasCanceled, wasOKed;
-    private int y;
-    private int nfIndex, sfIndex, cbIndex, choiceIndex, textAreaIndex;
-	private GridBagLayout grid;
+	private boolean wasCanceled, wasOKed;
+	private int nfIndex, sfIndex, cbIndex, choiceIndex, textAreaIndex, radioButtonIndex;
 	private GridBagConstraints c;
 	private boolean firstNumericField=true;
 	private boolean firstSlider=true;
 	private boolean invalidNumber;
 	private String errorMessage;
-	private boolean firstPaint = true;
 	private Hashtable labels;
 	private boolean macro;
 	private String macroOptions;
+	private boolean addToSameRow;
+	private boolean addToSameRowCalled;
 	private int topInset, leftInset, bottomInset;
-    private boolean customInsets;
-    private int[] sliderIndexes;
-    private double[] sliderScales;
-    private Checkbox previewCheckbox;    // the "Preview" Checkbox, if any
-    private Vector dialogListeners;             // the Objects to notify on user input
-    private PlugInFilterRunner pfr;      // the PlugInFilterRunner for automatic preview
-    private String previewLabel = " Preview";
-    private final static String previewRunning = "wait...";
-    private boolean recorderOn;         // whether recording is allowed
-    private boolean yesNoCancel;
-    private char echoChar;
-    private boolean hideCancelButton;
-    private boolean centerDialog = true;
-    private boolean positionDialog = false;
-    private int xPosition = 0, yPosition = 0;
-    private String helpURL;
-    private String yesLabel, noLabel;
+	private boolean customInsets;
+	private Vector sliderIndexes, sliderScales, sliderDigits;
+	private Checkbox previewCheckbox;    // the "Preview" Checkbox, if any
+	private Vector dialogListeners;             // the Objects to notify on user input
+	private PlugInFilterRunner pfr;      // the PlugInFilterRunner for automatic preview
+	private String previewLabel = " Preview";
+	private final static String previewRunning = "wait...";
+	private boolean recorderOn;         // whether recording is allowed
+	private boolean yesNoCancel;
+	private char echoChar;
+	private boolean hideCancelButton;
+	private boolean centerDialog = true;
+	private boolean positionDialog = false;
+	private int xPosition = 0, yPosition = 0;
+	private String helpURL;
+	private String yesLabel, noLabel;
+	private boolean smartRecording;
+	private Vector imagePanels;
+	private static GenericDialog instance;
+	private boolean firstPaint = true;
 
     /** Creates a new GenericDialog with the specified title. Uses the current image
     	image window as the parent frame or the ImageJ frame if no image windows
     	are open. Dialog parameters are recorded by ImageJ's command recorder but
     	this requires that the first word of each label be unique. */
-	public GenericDialog(String title, int x, int y) {
-        this(title, WindowManager.getCurrentImage()!=null?
-            (Frame)WindowManager.getCurrentImage().getWindow():IJ.getInstance()!=null?IJ.getInstance():new Frame());
-        positionDialog = true;
-        xPosition = x;
-        yPosition = y;
-    }
- 
-    public GenericDialog(String title) {
-		this(title, WindowManager.getCurrentImage()!=null?
-			(Frame)WindowManager.getCurrentImage().getWindow():IJ.getInstance()!=null?IJ.getInstance():new Frame());
+	public GenericDialog(String title) {
+		this(title, getParentFrame());
+	}
+
+	private static Frame getParentFrame() {
+		Frame parent = WindowManager.getCurrentImage()!=null?
+			(Frame)WindowManager.getCurrentImage().getWindow():IJ.getInstance()!=null?IJ.getInstance():new Frame();
+		if (IJ.isMacOSX() && IJ.isJava18()) {
+			ImageJ ij = IJ.getInstance();
+			if (ij!=null && ij.isActive())
+				parent = ij;
+			else
+				parent = null;
+		}
+		return parent;
 	}
 
     /** Creates a new GenericDialog using the specified title and parent frame. */
     public GenericDialog(String title, Frame parent) {
 		super(parent==null?new Frame():parent, title, true);
+		positionDialog = true;
+		xPosition = parent.getX();
+		yPosition = parent.getY();
 		if (Prefs.blackCanvas) {
 			setForeground(SystemColor.controlText);
 			setBackground(SystemColor.control);
 		}
-		//if (IJ.isLinux())
-		//	setBackground(new Color(238, 238, 238));
-		grid = new GridBagLayout();
+		GridBagLayout grid = new GridBagLayout();
 		c = new GridBagConstraints();
 		setLayout(grid);
 		macroOptions = Macro.getOptions();
@@ -115,14 +121,6 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		addKeyListener(this);
 		addWindowListener(this);
     }
-    
-	//void showFields(String id) {
-	//	String s = id+": ";
-	//	for (int i=0; i<maxItems; i++)
-	//		if (numberField[i]!=null)
-	//			s += i+"='"+numberField[i].getText()+"' ";
-	//	IJ.write(s);
-	//}
 
 	/** Adds a numeric field. The first word of the label must be
 		unique or command recording will not work.
@@ -147,15 +145,24 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
    		if (label2.indexOf('_')!=-1)
    			label2 = label2.replace('_', ' ');
 		Label theLabel = makeLabel(label2);
-		c.gridx = 0; c.gridy = y;
+		if (addToSameRow) {
+			c.gridx = GridBagConstraints.RELATIVE;
+			c.insets.left = 10;
+		} else {
+			c.gridx = 0; c.gridy++;
+			if (firstNumericField)
+				c.insets = getInsets(5, 0, 3, 0); // top, left, bottom, right
+			else
+				c.insets = getInsets(0, 0, 3, 0);
+		}
 		c.anchor = GridBagConstraints.EAST;
 		c.gridwidth = 1;
-		if (firstNumericField)
-			c.insets = getInsets(5, 0, 3, 0);
-		else
-			c.insets = getInsets(0, 0, 3, 0);
-		grid.setConstraints(theLabel, c);
-		add(theLabel);
+		//IJ.log("x="+c.gridx+", y= "+c.gridy+", width="+c.gridwidth+", ancher= "+c.anchor+" "+c.insets);
+		add(theLabel, c);
+		if (addToSameRow) {
+			c.insets.left = 0;
+			addToSameRow = false;
+		}
 		if (numberField==null) {
 			numberField = new Vector(5);
 			defaultValues = new Vector(5);
@@ -163,7 +170,10 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		}
 		if (IJ.isWindows()) columns -= 2;
 		if (columns<1) columns = 1;
-		TextField tf = new TextField(IJ.d2s(defaultValue, digits), columns);
+		String defaultString = IJ.d2s(defaultValue, digits);
+		if (Double.isNaN(defaultValue))
+			defaultString = "";
+		TextField tf = new TextField(defaultString, columns);
 		if (IJ.isLinux()) tf.setBackground(Color.white);
 		tf.addActionListener(this);
 		tf.addTextListener(this);
@@ -172,43 +182,53 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		numberField.addElement(tf);
 		defaultValues.addElement(new Double(defaultValue));
 		defaultText.addElement(tf.getText());
-		c.gridx = 1; c.gridy = y;
+		c.gridx = GridBagConstraints.RELATIVE;
 		c.anchor = GridBagConstraints.WEST;
 		tf.setEditable(true);
 		//if (firstNumericField) tf.selectAll();
 		firstNumericField = false;
 		if (units==null||units.equals("")) {
-			grid.setConstraints(tf, c);
-			add(tf);
+			add(tf, c);
 		} else {
     		Panel panel = new Panel();
 			panel.setLayout(new FlowLayout(FlowLayout.LEFT, 0, 0));
     		panel.add(tf);
 			panel.add(new Label(" "+units));
-			grid.setConstraints(panel, c);
-			add(panel);    		
+			add(panel, c);
 		}
 		if (Recorder.record || macro)
 			saveLabel(tf, label);
-		y++;
     }
-    
+
     private Label makeLabel(String label) {
     	if (IJ.isMacintosh())
     		label += " ";
 		return new Label(label);
     }
-    
-    private void saveLabel(Component component, String label) {
+
+	/** Saves the label for given component, for macro recording and for accessing the component in macros. */
+    private void saveLabel(Object component, String label) {
     	if (labels==null)
     		labels = new Hashtable();
-    	if (label.length()>0) {
-    		if (label.charAt(0)==' ')
-    			label = label.trim();
-			labels.put(component, label);
-		}
+    	if (label.length()>0)
+    		label = Macro.trimKey(label.trim());
+    	if (hasLabel(label)) {                      // not a unique label?
+    		label += "_0";
+    		for (int n=1; hasLabel(label); n++) {   // while still not a unique label
+    			label = label.substring(0, label.lastIndexOf('_')); //remove counter
+    			label += "_"+n;
+    		}
+    	}
+		labels.put(component, label);
     }
-    
+
+	/** Returns whether the list of labels for macro recording or macro creation contains a given label. */
+    private boolean hasLabel(String label) {
+    	for (Object o : labels.keySet())
+    		if (labels.get(o).equals(label)) return true;
+    	return false;
+    }
+
 	/** Adds an 8 column text field.
 	* @param label			the label
 	* @param defaultText		the text initially displayed
@@ -220,30 +240,32 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 	/** Adds a text field.
 	* @param label			the label
 	* @param defaultText		text initially displayed
-	* @param columns			width of the text field
+	* @param columns			width of the text field. If columns is 8 or more, additional items may be added to this line with addToSameRow()
 	*/
 	public void addStringField(String label, String defaultText, int columns) {
    		String label2 = label;
    		if (label2.indexOf('_')!=-1)
    			label2 = label2.replace('_', ' ');
 		Label theLabel = makeLabel(label2);
-		c.gridx = 0; c.gridy = y;
-		c.anchor = GridBagConstraints.EAST;
-		c.gridwidth = 1;
 		boolean custom = customInsets;
-		if (stringField==null) {
-			stringField = new Vector(4);
-			c.insets = getInsets(5, 0, 5, 0);
-		} else
-			c.insets = getInsets(0, 0, 5, 0);
-		grid.setConstraints(theLabel, c);
-		add(theLabel);
-		if (custom) {
-			if (stringField.size()==0)
-				c.insets = getInsets(5, 0, 5, 0);
+		if (addToSameRow) {
+			c.gridx = GridBagConstraints.RELATIVE;
+			addToSameRow = false;
+		} else {
+			c.gridx = 0; c.gridy++;
+			if (stringField==null)
+				c.insets = getInsets(5, 0, 5, 0); // top, left, bottom, right
 			else
 				c.insets = getInsets(0, 0, 5, 0);
+        }
+		c.anchor = GridBagConstraints.EAST;
+		c.gridwidth = 1;
+		add(theLabel, c);
+		if (stringField==null) {
+			stringField = new Vector(4);
+			defaultStrings = new Vector(4);
 		}
+
 		TextField tf = new TextField(defaultText, columns);
 		if (IJ.isLinux()) tf.setBackground(Color.white);
 		tf.setEchoChar(echoChar);
@@ -252,22 +274,23 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		tf.addTextListener(this);
 		tf.addFocusListener(this);
 		tf.addKeyListener(this);
-		c.gridx = 1; c.gridy = y;
+		c.gridx = GridBagConstraints.RELATIVE;
 		c.anchor = GridBagConstraints.WEST;
-		grid.setConstraints(tf, c);
+		c.gridwidth = columns <= 8 ? 1 : GridBagConstraints.REMAINDER;
+		c.insets.left = 0;
 		tf.setEditable(true);
-		add(tf);
+		add(tf, c);
 		stringField.addElement(tf);
+		defaultStrings.addElement(defaultText);
 		if (Recorder.record || macro)
 			saveLabel(tf, label);
-		y++;
     }
-    
+
     /** Sets the echo character for the next string field. */
     public void setEchoChar(char echoChar) {
     	this.echoChar = echoChar;
     }
-    
+
 	/** Adds a checkbox.
 	* @param label			the label
 	* @param defaultValue	the initial state
@@ -284,26 +307,31 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
     	String label2 = label;
    		if (label2.indexOf('_')!=-1)
    			label2 = label2.replace('_', ' ');
-    	if (checkbox==null) {
-    		checkbox = new Vector(4);
-			c.insets = getInsets(15, 20, 0, 0);
-    	} else
-			c.insets = getInsets(0, 20, 0, 0);
-		c.gridx = 0; c.gridy = y;
-		c.gridwidth = 2;
+		if (addToSameRow) {
+			c.gridx = GridBagConstraints.RELATIVE;
+			c.insets.left = 10;
+			addToSameRow = false;
+		} else {
+			c.gridx = 0; c.gridy++;
+			if (checkbox==null)
+				c.insets = getInsets(15, 20, 0, 0);  // top, left, bottom, right
+    		else
+				c.insets = getInsets(0, 20, 0, 0);
+		}
 		c.anchor = GridBagConstraints.WEST;
+		c.gridwidth = 2;
+    	if (checkbox==null)
+    		checkbox = new Vector(4);
 		Checkbox cb = new Checkbox(label2);
-		grid.setConstraints(cb, c);
 		cb.setState(defaultValue);
 		cb.addItemListener(this);
 		cb.addKeyListener(this);
-		add(cb);
+		add(cb, c);
+		c.insets.left = 0;
 		checkbox.addElement(cb);
-		//ij.IJ.write("addCheckbox: "+ y+" "+cbIndex);
         if (!isPreview &&(Recorder.record || macro)) //preview checkbox is not recordable
 			saveLabel(cb, label);
         if (isPreview) previewCheckbox = cb;
-		y++;
     }
 
     /** Adds a checkbox labelled "Preview" for "automatic" preview.
@@ -327,7 +355,7 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
         if (previewCheckbox != null)
         	return;
     	ImagePlus imp = WindowManager.getCurrentImage();
-		if (imp!=null && imp.isComposite() && ((CompositeImage)imp).getMode()==CompositeImage.COMPOSITE)
+		if (imp!=null && imp.isComposite() && ((CompositeImage)imp).getMode()==IJ.COMPOSITE)
 			return;
         this.pfr = pfr;
         addCheckbox(previewLabel, false, true);
@@ -342,9 +370,6 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
     public void addPreviewCheckbox(PlugInFilterRunner pfr, String label) {
         if (previewCheckbox!=null)
         	return;
-    	//ImagePlus imp = WindowManager.getCurrentImage();
-		//if (imp!=null && imp.isComposite() && ((CompositeImage)imp).getMode()==CompositeImage.COMPOSITE)
-		//	return;
         previewLabel = label;
         this.pfr = pfr;
         addCheckbox(previewLabel, false, true);
@@ -419,13 +444,52 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
  				i1++;
 			}
 		}
-		c.gridx = 0; c.gridy = y;
-		c.gridwidth = 2;
+		c.gridx = 0; c.gridy++;
+		c.gridwidth = GridBagConstraints.REMAINDER;
 		c.anchor = GridBagConstraints.WEST;
 		c.insets = getInsets(0, 20, 0, 0);
-		grid.setConstraints(panel, c);
-		add(panel);
-		y++;
+		addToSameRow = false;
+		add(panel, c);
+    }
+
+    /** Adds a radio button group.
+	* @param label			group label (or null)
+	* @param items		radio button labels
+	* @param rows			number of rows
+	* @param columns	number of columns
+	* @param defaultItem		button initially selected
+	*/
+    public void addRadioButtonGroup(String label, String[] items, int rows, int columns, String defaultItem) {
+		addToSameRow = false;
+    	Panel panel = new Panel();
+    	int n = items.length;
+     	panel.setLayout(new GridLayout(rows, columns, 0, 0));
+		CheckboxGroup cg = new CheckboxGroup();
+		for (int i=0; i<n; i++) {
+			Checkbox cb = new Checkbox(items[i],cg,items[i].equals(defaultItem));
+			cb.addItemListener(this);
+			panel.add(cb);
+		}
+		if (radioButtonGroups==null)
+			radioButtonGroups = new Vector();
+		radioButtonGroups.addElement(cg);
+		Insets insets = getInsets(5, 10, 0, 0);
+		if (label==null || label.equals("")) {
+			label = "rbg"+radioButtonGroups.size();
+			insets.top += 5;
+		} else {
+			setInsets(10, insets.left, 0);
+			addMessage(label);
+			insets.top = 2;
+			insets.left += 10;
+		}
+		c.gridx = 0; c.gridy++;
+		c.gridwidth = GridBagConstraints.REMAINDER;
+		c.anchor = GridBagConstraints.WEST;
+		c.insets = new Insets(insets.top, insets.left, 0, 0);
+		add(panel, c);
+		if (Recorder.record || macro)
+			saveLabel(cg, label);
     }
 
     /** Adds a popup menu.
@@ -438,124 +502,182 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
    		if (label2.indexOf('_')!=-1)
    			label2 = label2.replace('_', ' ');
 		Label theLabel = makeLabel(label2);
-		c.gridx = 0; c.gridy = y;
+		if (addToSameRow) {
+			c.gridx = GridBagConstraints.RELATIVE;
+			addToSameRow = false;
+		} else {
+			c.gridx = 0; c.gridy++;
+			if (choice==null)
+				c.insets = getInsets(5, 0, 5, 0);
+			else
+				c.insets = getInsets(0, 0, 5, 0);
+		}
 		c.anchor = GridBagConstraints.EAST;
 		c.gridwidth = 1;
 		if (choice==null) {
 			choice = new Vector(4);
-			c.insets = getInsets(5, 0, 5, 0);
-		} else
-			c.insets = getInsets(0, 0, 5, 0);
-		grid.setConstraints(theLabel, c);
-		add(theLabel);
+			defaultChoiceIndexes = new Vector(4);
+		}
+		add(theLabel, c);
 		Choice thisChoice = new Choice();
 		thisChoice.addKeyListener(this);
 		thisChoice.addItemListener(this);
 		for (int i=0; i<items.length; i++)
 			thisChoice.addItem(items[i]);
-		thisChoice.select(defaultItem);
-		c.gridx = 1; c.gridy = y;
+		if (defaultItem!=null)
+			thisChoice.select(defaultItem);
+		else
+			thisChoice.select(0);
+		c.gridx = GridBagConstraints.RELATIVE;
 		c.anchor = GridBagConstraints.WEST;
-		grid.setConstraints(thisChoice, c);
-		add(thisChoice);
+		add(thisChoice, c);
 		choice.addElement(thisChoice);
+		int index = thisChoice.getSelectedIndex();
+		defaultChoiceIndexes.addElement(new Integer(index));
 		if (Recorder.record || macro)
 			saveLabel(thisChoice, label);
-		y++;
     }
-    
+
     /** Adds a message consisting of one or more lines of text. */
     public void addMessage(String text) {
-    	addMessage(text, null);
+    	addMessage(text, null, null);
     }
 
     /** Adds a message consisting of one or more lines of text,
     	which will be displayed using the specified font. */
     public void addMessage(String text, Font font) {
+    	addMessage(text, font, null);
+    }
+
+    /** Adds a message consisting of one or more lines of text,
+    	which will be displayed using the specified font and color. */
+    public void addMessage(String text, Font font, Color color) {
     	theLabel = null;
     	if (text.indexOf('\n')>=0)
 			theLabel = new MultiLineLabel(text);
 		else
 			theLabel = new Label(text);
-		//theLabel.addKeyListener(this);
-		c.gridx = 0; c.gridy = y;
-		c.gridwidth = 2;
+		if (addToSameRow) {
+			c.gridx = GridBagConstraints.RELATIVE;
+			addToSameRow = false;
+		} else {
+			c.gridx = 0; c.gridy++;
+			c.insets = getInsets("".equals(text)?0:10, 20, 0, 0); // top, left, bottom, right
+		}
+		c.gridwidth = GridBagConstraints.REMAINDER;
 		c.anchor = GridBagConstraints.WEST;
-		c.insets = getInsets(text.equals("")?0:10, 20, 0, 0);
 		c.fill = GridBagConstraints.HORIZONTAL;
-		grid.setConstraints(theLabel, c);
 		if (font!=null)
 			theLabel.setFont(font);
-		add(theLabel);
+		if (color!=null)
+			theLabel.setForeground(color);
+		add(theLabel, c);
 		c.fill = GridBagConstraints.NONE;
-		y++;
     }
-    
+
 	/** Adds one or two (side by side) text areas.
 	* @param text1	initial contents of the first text area
 	* @param text2	initial contents of the second text area or null
 	* @param rows	the number of rows
-	* @param rows	the number of columns
+	* @param columns	the number of columns
 	*/
     public void addTextAreas(String text1, String text2, int rows, int columns) {
-    	if (textArea1!=null) return;
-    	Panel panel = new Panel();
+		if (textArea1!=null) return;
+		Panel panel = new Panel();
+		Font font = new Font("SansSerif", Font.PLAIN, 14);
 		textArea1 = new TextArea(text1,rows,columns,TextArea.SCROLLBARS_NONE);
 		if (IJ.isLinux()) textArea1.setBackground(Color.white);
+		textArea1.setFont(font);
 		textArea1.addTextListener(this);
 		panel.add(textArea1);
 		if (text2!=null) {
 			textArea2 = new TextArea(text2,rows,columns,TextArea.SCROLLBARS_NONE);
 			if (IJ.isLinux()) textArea2.setBackground(Color.white);
+			textArea2.setFont(font);
 			panel.add(textArea2);
 		}
-		c.gridx = 0; c.gridy = y;
-		c.gridwidth = 2;
+		c.gridx = 0; c.gridy++;
+		c.gridwidth = GridBagConstraints.REMAINDER;
 		c.anchor = GridBagConstraints.WEST;
 		c.insets = getInsets(15, 20, 0, 0);
-		grid.setConstraints(panel, c);
-		add(panel);
-		y++;
+        addToSameRow = false;
+		add(panel, c);
     }
-    
+
 	/**
 	* Adds a slider (scroll bar) to the dialog box.
-	* Floating point values will be used if (maxValue-minValue)<=5.0
-	* and either minValue or maxValue are non-integer.
+	* Floating point values are used if (maxValue-minValue)<=5.0
+	* and either defaultValue or minValue are non-integer.
 	* @param label	 the label
 	* @param minValue  the minimum value of the slider
 	* @param maxValue  the maximum value of the slider
 	* @param defaultValue  the initial value of the slider
 	*/
 	public void addSlider(String label, double minValue, double maxValue, double defaultValue) {
-		int columns = 4;
+		if (defaultValue<minValue) defaultValue=minValue;
+		if (defaultValue>maxValue) defaultValue=maxValue;
 		int digits = 0;
 		double scale = 1.0;
-		if ((maxValue-minValue)<=5.1 && ((minValue != 0.0 && minValue!=(int)minValue)||maxValue!=(int)maxValue||defaultValue!=(int)defaultValue)) {
-			scale = 20.0;
+		if ((maxValue-minValue)<=5.1 && (minValue != 0.0 && minValue!=(int)minValue||maxValue!=(int)maxValue||defaultValue!=(int)defaultValue)) {
+			scale = 50.0;
 			minValue *= scale;
 			maxValue *= scale;
 			defaultValue *= scale;
 			digits = 2;
 		}
+		addSlider( label, minValue, maxValue, defaultValue, scale, digits);
+	}
+	
+	/** This vesion of addSlider() adds a 'stepSize' argument.<br>
+	 * Example: http://wsr.imagej.net/macros/SliderDemo.txt
+	*/
+	public void addSlider(String label, double minValue, double maxValue, double defaultValue, double stepSize) {
+		if ( stepSize <= 0 ) stepSize  = 1;
+		int digits = digits(stepSize);		
+		double scale = 1.0 / Math.abs( stepSize );
+		if ( scale <= 0 ) scale = 1;
+		if ( defaultValue < minValue ) defaultValue = minValue;
+		if ( defaultValue > maxValue ) defaultValue = maxValue;
+		minValue *= scale;
+		maxValue *= scale;
+		defaultValue *= scale;
+		addSlider(label, minValue, maxValue, defaultValue, scale, digits);
+	}
+	
+	private int digits( double d ) {
+		if ( d == (int) d ) return 0;
+		String s = Double.toString(d);
+		s = s.substring(s.indexOf(".") + 1);
+		return s.length();
+	}
+
+	private void addSlider(String label, double minValue, double maxValue, double defaultValue, double scale, int digits) {
+		int columns = 4 + digits - 2;
+		if ( columns < 4 ) columns = 4;
+		if (minValue<0.0) columns++;
    		String label2 = label;
    		if (label2.indexOf('_')!=-1)
    			label2 = label2.replace('_', ' ');
 		Label theLabel = makeLabel(label2);
-		c.gridx = 0; c.gridy = y;
+		if (addToSameRow) {
+			c.gridx = GridBagConstraints.RELATIVE;
+			c.insets.bottom += 3;
+			addToSameRow = false;
+		} else {
+			c.gridx = 0; c.gridy++;
+			c.insets = getInsets(0, 0, 3, 0); // top, left, bottom, right
+		}
 		c.anchor = GridBagConstraints.EAST;
 		c.gridwidth = 1;
-		c.insets = new Insets(0, 0, 3, 0);
-		grid.setConstraints(theLabel, c);
-		add(theLabel);
-		
+		add(theLabel, c);
+
 		if (slider==null) {
 			slider = new Vector(5);
-			sliderIndexes = new int[MAX_SLIDERS];
-			sliderScales = new double[MAX_SLIDERS];
+			sliderIndexes = new Vector(5);
+			sliderScales = new Vector(5);
+			sliderDigits = new Vector(5);	
 		}
 		Scrollbar s = new Scrollbar(Scrollbar.HORIZONTAL, (int)defaultValue, 1, (int)minValue, (int)maxValue+1);
-		GUI.fix(s);
 		slider.addElement(s);
 		s.addAdjustmentListener(this);
 		s.setUnitIncrement(1);
@@ -567,6 +689,7 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		}
 		if (IJ.isWindows()) columns -= 2;
 		if (columns<1) columns = 1;
+		//IJ.log("scale=" + scale + ", columns=" + columns + ", digits=" + digits);
 		TextField tf = new TextField(IJ.d2s(defaultValue/scale, digits), columns);
 		if (IJ.isLinux()) tf.setBackground(Color.white);
 		tf.addActionListener(this);
@@ -574,77 +697,80 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		tf.addFocusListener(this);
 		tf.addKeyListener(this);
 		numberField.addElement(tf);
-		sliderIndexes[slider.size()-1] = numberField.size()-1;
-		sliderScales[slider.size()-1] = scale;
+		sliderIndexes.add(new Integer(numberField.size()-1));
+		sliderScales.add(new Double(scale));
+		sliderDigits.add(new Integer(digits));
 		defaultValues.addElement(new Double(defaultValue/scale));
 		defaultText.addElement(tf.getText());
 		tf.setEditable(true);
-		//if (firstNumericField && firstSlider) tf.selectAll();
 		firstSlider = false;
-		
+
     	Panel panel = new Panel();
 		GridBagLayout pgrid = new GridBagLayout();
 		GridBagConstraints pc  = new GridBagConstraints();
 		panel.setLayout(pgrid);
-		// label
-		//pc.insets = new Insets(5, 0, 0, 0);
-		//pc.gridx = 0; pc.gridy = 0;
-		//pc.gridwidth = 1;
-		//pc.anchor = GridBagConstraints.EAST;
-		//pgrid.setConstraints(theLabel, pc);
-		//panel.add(theLabel);
-		// slider
 		pc.gridx = 0; pc.gridy = 0;
 		pc.gridwidth = 1;
-		pc.ipadx = 75;
+		pc.ipadx = 85;
 		pc.anchor = GridBagConstraints.WEST;
-		pgrid.setConstraints(s, pc);
-		panel.add(s);
+		panel.add(s, pc);
 		pc.ipadx = 0;  // reset
 		// text field
 		pc.gridx = 1;
 		pc.insets = new Insets(5, 5, 0, 0);
 		pc.anchor = GridBagConstraints.EAST;
-		pgrid.setConstraints(tf, pc);
-    	panel.add(tf);
-    	
-		grid.setConstraints(panel, c);
-		c.gridx = 1; c.gridy = y;
+    	panel.add(tf, pc);
+
+		c.gridx = GridBagConstraints.RELATIVE;
 		c.gridwidth = 1;
 		c.anchor = GridBagConstraints.WEST;
-		c.insets = new Insets(0, 0, 0, 0);
-		grid.setConstraints(panel, c);
-		add(panel);
-		y++;
+        c.insets.left = 0;
+        c.insets.bottom -= 3;
+		add(panel, c);
 		if (Recorder.record || macro)
 			saveLabel(tf, label);
     }
 
     /** Adds a Panel to the dialog. */
     public void addPanel(Panel panel) {
-    	addPanel(panel , GridBagConstraints.WEST, new Insets(5, 0, 0, 0));
+    	addPanel(panel, GridBagConstraints.WEST, addToSameRow ? c.insets : getInsets(5,0,0,0));
     }
 
     /** Adds a Panel to the dialog with custom contraint and insets. The
-    	defaults are GridBagConstraints.WEST (left justified) and 
+    	defaults are GridBagConstraints.WEST (left justified) and
     	"new Insets(5, 0, 0, 0)" (5 pixels of padding at the top). */
-    public void addPanel(Panel panel, int contraints, Insets insets) {
-		c.gridx = 0; c.gridy = y;
+    public void addPanel(Panel panel, int constraints, Insets insets) {
+		if (addToSameRow) {
+			c.gridx = GridBagConstraints.RELATIVE;
+			addToSameRow = false;
+		} else {
+			c.gridx = 0; c.gridy++;
+		}
 		c.gridwidth = 2;
-		c.anchor = contraints;
+		c.anchor = constraints;
 		c.insets = insets;
-		grid.setConstraints(panel, c);
-		add(panel);
-		y++;
+		add(panel, c);
     }
-    
-    /** Set the insets (margins), in pixels, that will be 
-    	used for the next component added to the dialog.
+
+	/** Adds an image to the dialog. */
+    public void addImage(ImagePlus image) {
+    	ImagePanel imagePanel = new ImagePanel(image);
+    	addPanel(imagePanel);
+    	if (imagePanels==null)
+    		imagePanels = new Vector();
+    	imagePanels.add(imagePanel);
+    }
+
+
+    /** Set the insets (margins), in pixels, that will be
+    	used for the next component added to the dialog
+        (except components added to the same row with addToSameRow)
     <pre>
     Default insets:
         addMessage: 0,20,0 (empty string) or 10,20,0
         addCheckbox: 15,20,0 (first checkbox) or 0,20,0
-        addCheckboxGroup: 10,0,0 
+        addCheckboxGroup: 10,0,0
+        addRadioButtonGroup: 5,10,0
         addNumericField: 5,0,3 (first field) or 0,0,3
         addStringField: 5,0,5 (first field) or 0,0,5
         addChoice: 5,0,5 (first field) or 0,0,5
@@ -656,7 +782,19 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
     	bottomInset = bottom;
     	customInsets = true;
     }
-    
+
+    /** Makes the next item appear in the same row as the previous.
+     *  May be used for addNumericField, addSlider, addChoice, addCheckbox, addStringField,
+     *  addMessage, addPanel, and before the showDialog() method
+     *  (in the latter case, the buttons appear to the right of the previous item).
+     *  Note that addMessage (and addStringField, if its column width is more than 8) use
+     *  the remaining width, so it must be the last item of a row. 
+     */
+    public void addToSameRow() {
+        addToSameRow = true;
+        addToSameRowCalled = true;
+    }
+
     /** Sets a replacement label for the "OK" button. */
     public void setOKLabel(String label) {
     	okLabel = label;
@@ -672,11 +810,16 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
     	helpLabel = label;
     }
 
+    /** Unchanged parameters are not recorder in 'smart recording' mode. */
+    public void setSmartRecording(boolean smartRecording) {
+    	this.smartRecording = smartRecording;
+    }
+
     /** Make this a "Yes No Cancel" dialog. */
     public void enableYesNoCancel() {
     	enableYesNoCancel(" Yes ", " No ");
     }
-    
+
     /** Make this a "Yes No Cancel" dialog with custom labels. Here is an example:
     	<pre>
         GenericDialog gd = new GenericDialog("YesNoCancel Demo");
@@ -718,7 +861,7 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
      * For other listeners, the OK button will not cause a call to dialogItemChanged;
      * the CANCEL button will never cause such a call.
      * @param dl the Object that wants to listen.
-     */    
+     */
     public void addDialogListener(DialogListener dl) {
         if (dialogListeners == null)
             dialogListeners = new Vector();
@@ -728,11 +871,11 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 
 	/** Returns true if the user clicked on "Cancel". */
     public boolean wasCanceled() {
-    	if (wasCanceled)
+    	if (wasCanceled && !Thread.currentThread().getName().endsWith("Script_Macro$"))
     		Macro.abort();
     	return wasCanceled;
     }
-    
+
 	/** Returns true if the user has clicked on "OK" or a macro is running. */
     public boolean wasOKed() {
     	return wasOKed || macro;
@@ -749,14 +892,15 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		if (macro) {
 			label = (String)labels.get((Object)tf);
 			theText = Macro.getValue(macroOptions, label, theText);
-			//IJ.write("getNextNumber: "+label+"  "+theText);
-		}	
+		}
 		String originalText = (String)defaultText.elementAt(nfIndex);
 		double defaultValue = ((Double)(defaultValues.elementAt(nfIndex))).doubleValue();
 		double value;
-		if (theText.equals(originalText))
+		boolean skipRecording = false;
+		if (theText.equals(originalText)) {
 			value = defaultValue;
-		else {
+			if (smartRecording) skipRecording=true;
+		} else {
 			Double d = getValue(theText);
 			if (d!=null)
 				value = d.doubleValue();
@@ -778,12 +922,13 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
                 }
 			}
 		}
-		if (recorderOn)
+		if (recorderOn && !skipRecording) {
 			recordOption(tf, trim(theText));
+		}
 		nfIndex++;
 		return value;
     }
-    
+
 	private String trim(String value) {
 		if (value.endsWith(".0"))
 			value = value.substring(0, value.length()-2);
@@ -792,8 +937,8 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		return value;
 	}
 
-	private void recordOption(Component component, String value) {
-		String label = (String)labels.get((Object)component);
+	private void recordOption(Object component, String value) {
+		String label = (String)labels.get(component);
 		if (value.equals("")) value = "[]";
 		Recorder.recordOption(label, value);
 	}
@@ -827,16 +972,16 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		}
 		return value;
 	}
-	
-	/** Returns true if one or more of the numeric fields contained an  
+
+	/** Returns true if one or more of the numeric fields contained an
 		invalid number. Must be called after one or more calls to getNextNumber(). */
    public boolean invalidNumber() {
     	boolean wasInvalid = invalidNumber;
     	invalidNumber = false;
     	return wasInvalid;
     }
-    
-	/** Returns an error message if getNextNumber was unable to convert a 
+
+	/** Returns an error message if getNextNumber was unable to convert a
 		string into a number, otherwise, returns null. */
 	public String getErrorMessage() {
 		return errorMessage;
@@ -859,13 +1004,21 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 				String s = interp!=null?interp.getVariableAsString(theText):null;
 				if (s!=null) theText = s;
 			}
-		}	
-		if (recorderOn)
-			recordOption(tf, theText);
+		}
+		if (recorderOn) {
+			String s = theText;
+			if (s!=null&&s.length()>=3&&Character.isLetter(s.charAt(0))&&s.charAt(1)==':'&&s.charAt(2)=='\\')
+				s = s.replaceAll("\\\\", "/");  // replace "\" with "/" in Windows file paths
+			s = Recorder.fixString(s);
+			if (!smartRecording || !s.equals((String)defaultStrings.elementAt(sfIndex)))
+				recordOption(tf, s);
+			else if (Recorder.getCommandOptions()==null)
+				Recorder.recordOption(" ");
+		}
 		sfIndex++;
 		return theText;
     }
-    
+
   	/** Returns the state of the next checkbox. */
     public boolean getNextBoolean() {
 		if (checkbox==null)
@@ -882,7 +1035,7 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		cbIndex++;
 		return state;
     }
-    
+
     // Returns true if s2 is in s1 and not in a bracketed literal (e.g., "[literal]")
     boolean isMatch(String s1, String s2) {
     	if (s1.startsWith(s2))
@@ -909,7 +1062,7 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
     	}
     	return false;
     }
-    
+
   	/** Returns the selected item in the next popup menu. */
     public String getNextChoice() {
 		if (choice==null)
@@ -921,13 +1074,13 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 			item = Macro.getValue(macroOptions, label, item);
 			if (item!=null && item.startsWith("&")) // value is macro variable
 				item = getChoiceVariable(item);
-		}	
+		}
 		if (recorderOn)
 			recordOption(thisChoice, item);
 		choiceIndex++;
 		return item;
     }
-    
+
   	/** Returns the index of the selected item in the next popup menu. */
     public int getNextChoiceIndex() {
 		if (choice==null)
@@ -952,53 +1105,79 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 				else
 					item = s;
 			}
-		}	
+		}
 		if (recorderOn) {
-			String item = thisChoice.getSelectedItem();
-			if (!(item.equals("*None*")&&getTitle().equals("Merge Channels")))
-				recordOption(thisChoice, thisChoice.getSelectedItem());
+			int defaultIndex = ((Integer)(defaultChoiceIndexes.elementAt(choiceIndex))).intValue();
+			if (!(smartRecording&&index==defaultIndex)) {
+				String item = thisChoice.getSelectedItem();
+				if (!(item.equals("*None*")&&getTitle().equals("Merge Channels")))
+					recordOption(thisChoice, thisChoice.getSelectedItem());
+			}
 		}
 		choiceIndex++;
 		return index;
     }
-    
+
+  	/** Returns the selected item in the next radio button group. */
+    public String getNextRadioButton() {
+		if (radioButtonGroups==null)
+			return null;
+		CheckboxGroup cg = (CheckboxGroup)(radioButtonGroups.elementAt(radioButtonIndex));
+		radioButtonIndex++;
+		Checkbox checkbox = cg.getSelectedCheckbox();
+		String item = "null";
+		if (checkbox!=null)
+			item = checkbox.getLabel();
+		if (macro) {
+			String label = (String)labels.get((Object)cg);
+			item = Macro.getValue(macroOptions, label, item);
+		}
+		if (recorderOn)
+			recordOption(cg, item);
+		return item;
+    }
+
     private String getChoiceVariable(String item) {
 		item = item.substring(1);
 		Interpreter interp = Interpreter.getInstance();
 		String s = interp!=null?interp.getStringVariable(item):null;
-		if (s!=null) item = s;
+		if (s==null) {
+			double value = interp!=null?interp.getVariable2(item):Double.NaN;
+			if (!Double.isNaN(value)) {
+				if ((int)value==value)
+					s = ""+(int)value;
+				else
+					s = ""+value;
+			}
+		}
+		if (s!=null)
+			item = s;
 		return item;
 	}
-    
-  	/** Returns the contents of the next textarea. */
+
+  	/** Returns the contents of the next text area. */
 	public String getNextText() {
-		String text;
+		String text = null;
+		String key = "text1";
 		if (textAreaIndex==0 && textArea1!=null) {
-			//textArea1.selectAll();
 			text = textArea1.getText();
-			textAreaIndex++;
 			if (macro)
 				text = Macro.getValue(macroOptions, "text1", text);
-			if (recorderOn) {
-				String text2 = text;
-				String cmd = Recorder.getCommand();
-				if (cmd!=null && cmd.equals("Convolve...")) {
-					text2 = text.replaceAll("\n","\\\\n");
-					if (!text.endsWith("\n")) text2 = text2 + "\\n";
-				} else
-					text2 = text.replace('\n',' ');
-				Recorder.recordOption("text1", text2);
-			}
 		} else if (textAreaIndex==1 && textArea2!=null) {
-			textArea2.selectAll();
 			text = textArea2.getText();
-			textAreaIndex++;
 			if (macro)
 				text = Macro.getValue(macroOptions, "text2", text);
-			if (recorderOn)
-				Recorder.recordOption("text2", text.replace('\n',' '));
-		} else
-			text = null;
+			key = "text2";
+		}
+		textAreaIndex++;
+		if (recorderOn && text!=null) {
+			String text2 = text;
+			String cmd = Recorder.getCommand();
+			if (cmd!=null && cmd.equals("Calibrate..."))
+				text2 = text2.replace('\n',' ');
+			text2 = Recorder.fixString(text2);
+			Recorder.recordOption(key, text2);
+		}
 		return text;
 	}
 
@@ -1030,26 +1209,29 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 				help.addActionListener(this);
 				help.addKeyListener(this);
 			}
-			if (IJ.isMacintosh()) {
-				if (addHelp) buttons.add(help);
-				if (yesNoCancel) buttons.add(no);
-				if (!hideCancelButton) buttons.add(cancel);
-				buttons.add(okay);
-			} else {
+			if (IJ.isWindows() || Prefs.dialogCancelButtonOnRight) {
 				buttons.add(okay);
 				if (yesNoCancel) buttons.add(no);;
 				if (!hideCancelButton)
 					buttons.add(cancel);
 				if (addHelp) buttons.add(help);
+			} else {
+				if (addHelp) buttons.add(help);
+				if (yesNoCancel) buttons.add(no);
+				if (!hideCancelButton) buttons.add(cancel);
+				buttons.add(okay);
 			}
-			c.gridx = 0; c.gridy = y;
+			if (addToSameRow) {
+				c.gridx = GridBagConstraints.RELATIVE;
+			} else {
+				c.gridx = 0; c.gridy++;
+			}
 			c.anchor = GridBagConstraints.EAST;
-			c.gridwidth = 2;
+			c.gridwidth = addToSameRowCalled?GridBagConstraints.REMAINDER:2;
 			c.insets = new Insets(15, 0, 0, 0);
-			grid.setConstraints(buttons, c);
-			add(buttons);
-			if (IJ.isMacintosh())
-				setResizable(false);
+			add(buttons, c);
+			if (IJ.isMacOSX()&&IJ.isJava18())
+				instance = this;
 			pack();
 			setup();
 			if (positionDialog)
@@ -1057,8 +1239,9 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
             else if (centerDialog) GUI.center(this);
 			setVisible(true);
 			recorderOn = Recorder.record;
-			IJ.wait(50); // work around for Sun/WinNT bug
+			IJ.wait(25);
 		}
+
 		/* For plugins that read their input only via dialogItemChanged, call it at least once */
 		if (!wasCanceled && dialogListeners!=null && dialogListeners.size()>0) {
 			resetCounters();
@@ -1067,22 +1250,23 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		}
 		resetCounters();
 	}
-	
+
     /** Reset the counters before reading the dialog parameters */
-    private void resetCounters() {
-        nfIndex = 0;        // prepare for readout
+	private void resetCounters() {
+		nfIndex = 0;        // prepare for readout
 		sfIndex = 0;
 		cbIndex = 0;
 		choiceIndex = 0;
 		textAreaIndex = 0;
-        invalidNumber = false;
-}
+		radioButtonIndex = 0;
+		invalidNumber = false;
+	}
 
-/** Returns the Vector containing the numeric TextFields. */
+	/** Returns the Vector containing the numeric TextFields. */
   	public Vector getNumericFields() {
   		return numberField;
   	}
-    
+
   	/** Returns the Vector containing the string TextFields. */
   	public Vector getStringFields() {
   		return stringField;
@@ -1103,6 +1287,11 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
   		return slider;
   	}
 
+  	/** Returns the Vector that contains the RadioButtonGroups. */
+  	public Vector getRadioButtonGroups() {
+  		return radioButtonGroups;
+  	}
+
   	/** Returns a reference to textArea1. */
   	public TextArea getTextArea1() {
   		return textArea1;
@@ -1112,19 +1301,24 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
   	public TextArea getTextArea2() {
   		return textArea2;
   	}
-  	
+
   	/** Returns a reference to the Label or MultiLineLabel created by the
   		last addMessage() call, or null if addMessage() was not called. */
   	public Component getMessage() {
   		return theLabel;
   	}
 
-    /** Returns a reference to the Preview Checkbox. */
+    /** Returns a reference to the Preview checkbox. */
     public Checkbox getPreviewCheckbox() {
         return previewCheckbox;
     }
-    
-	/** Returns references to the "OK" ("Yes"), "Cancel", 
+
+    /** Returns 'true' if this dialog has a "Preview" checkbox and it is enabled. */
+    public boolean isPreviewActive() {
+        return previewCheckbox!=null && previewCheckbox.getState();
+    }
+
+	/** Returns references to the "OK" ("Yes"), "Cancel",
 		and if present, "No" buttons as an array. */
 	public Button[] getButtons() {
   		Button[] buttons = new Button[3];
@@ -1143,10 +1337,21 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
             if (IJ.isMacOSX()) repaint();   //workaround OSX 10.4 refresh bug
         }
     }
-    
-    /** Display dialog centered on the primary screen? */
+
+    /** Display dialog centered on the primary screen. */
     public void centerDialog(boolean b) {
     	centerDialog = b;
+    }
+
+    /* Display the dialog at the specified location. */
+    public void setLocation(int x, int y) {
+    	super.setLocation(x, y);
+    	centerDialog = false;
+    }
+
+    public void setDefaultString(int index, String str) {
+    	if (defaultStrings!=null && index>=0 && index<defaultStrings.size())
+    		defaultStrings.set(index, str);
     }
 
     protected void setup() {
@@ -1172,31 +1377,32 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		} else
             notifyListeners(e);
 	}
-	
+
 	public void textValueChanged(TextEvent e) {
-        notifyListeners(e); 
+        notifyListeners(e);
 		if (slider==null) return;
 		Object source = e.getSource();
 		for (int i=0; i<slider.size(); i++) {
-			int index = sliderIndexes[i];
+			int index = ((Integer)sliderIndexes.get(i)).intValue();
 			if (source==numberField.elementAt(index)) {
 				TextField tf = (TextField)numberField.elementAt(index);
 				double value = Tools.parseDouble(tf.getText());
 				if (!Double.isNaN(value)) {
 					Scrollbar sb = (Scrollbar)slider.elementAt(i);
-					sb.setValue((int)(value*sliderScales[i]));
-				}	
-				//IJ.log(i+" "+tf.getText());
+					double scale = ((Double)sliderScales.get(i)).doubleValue();
+					sb.setValue((int)(value*scale));
+				}
 			}
 		}
 	}
 
 	public void itemStateChanged(ItemEvent e) {
-        notifyListeners(e); 
+        notifyListeners(e);
 	}
 
 	public void focusGained(FocusEvent e) {
 		Component c = e.getComponent();
+		//IJ.log("focusGained: "+c);
 		if (c instanceof TextField)
 			((TextField)c).selectAll();
 	}
@@ -1207,24 +1413,23 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 			((TextField)c).select(0,0);
 	}
 
-	public void keyPressed(KeyEvent e) { 
-		int keyCode = e.getKeyCode(); 
-		IJ.setKeyDown(keyCode); 
-		if (keyCode==KeyEvent.VK_ENTER && textArea1==null) {
+	public void keyPressed(KeyEvent e) {
+		int keyCode = e.getKeyCode();
+		IJ.setKeyDown(keyCode);
+		if (keyCode==KeyEvent.VK_ENTER && textArea1==null && okay!=null && okay.isEnabled()) {
 			wasOKed = true;
-			if (IJ.isMacOSX()&&IJ.isJava15())
+			if (IJ.isMacOSX())
 				accessTextFields();
 			dispose();
-		} else if (keyCode==KeyEvent.VK_ESCAPE) { 
-			wasCanceled = true; 
-			dispose(); 
+		} else if (keyCode==KeyEvent.VK_ESCAPE) {
+			wasCanceled = true;
+			dispose();
 			IJ.resetEscape();
-		} else if (keyCode==KeyEvent.VK_W && (e.getModifiers()&Toolkit.getDefaultToolkit().getMenuShortcutKeyMask())!=0) { 
-			wasCanceled = true; 
-			dispose(); 
-		} 
-	} 
-		
+		} else if (keyCode==KeyEvent.VK_W && (e.getModifiers()&Toolkit.getDefaultToolkit().getMenuShortcutKeyMask())!=0) {
+			wasCanceled = true;
+			dispose();
+		}
+	}
 
 	void accessTextFields() {
 		if (stringField!=null) {
@@ -1245,9 +1450,9 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		boolean meta = (flags & KeyEvent.META_MASK) != 0;
 		boolean shift = (flags & e.SHIFT_MASK) != 0;
 		if (keyCode==KeyEvent.VK_G && shift && (control||meta))
-			new ScreenGrabber().run(""); 
+			new ScreenGrabber().run("");
 	}
-		
+
 	public void keyTyped(KeyEvent e) {}
 
 	public Insets getInsets() {
@@ -1260,9 +1465,11 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		for (int i=0; i<slider.size(); i++) {
 			if (source==slider.elementAt(i)) {
 				Scrollbar sb = (Scrollbar)source;
-				TextField tf = (TextField)numberField.elementAt(sliderIndexes[i]);
-				int digits = sliderScales[i]==1.0?0:2;
-				tf.setText(""+IJ.d2s(sb.getValue()/sliderScales[i],digits));
+				int index = ((Integer)sliderIndexes.get(i)).intValue();
+				TextField tf = (TextField)numberField.elementAt(index);
+				double scale = ((Double)sliderScales.get(i)).doubleValue();
+				int digits = ((Integer)sliderDigits.get(i)).intValue();
+				tf.setText(""+IJ.d2s(sb.getValue()/scale,digits));
 			}
 		}
 	}
@@ -1276,7 +1483,8 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
      *  of the PlugInFilter for preview is avoided in that case.
      */
     private void notifyListeners(AWTEvent e) {
-        if (dialogListeners == null) return;
+        if (dialogListeners==null)
+        	return;
         boolean everythingOk = true;
         for (int i=0; everythingOk && i<dialogListeners.size(); i++)
             try {
@@ -1288,33 +1496,43 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
                 IJ.log("ERROR: "+err+"\nin DialogListener of "+dialogListeners.elementAt(i)+
                 "\nat "+(err.getStackTrace()[0])+"\nfrom "+(err.getStackTrace()[1]));  //requires Java 1.4
             }
-        boolean workaroundOSXbug = IJ.isMacOSX() && !okay.isEnabled() && everythingOk;
+        boolean workaroundOSXbug = IJ.isMacOSX() && okay!=null && !okay.isEnabled() && everythingOk;
         if (previewCheckbox!=null)
             previewCheckbox.setEnabled(everythingOk);
-        okay.setEnabled(everythingOk);
-        if (workaroundOSXbug) repaint(); // OSX 10.4 bug delays update of enabled until the next input
+        if (okay!=null)
+            okay.setEnabled(everythingOk);
+        if (workaroundOSXbug)
+        	repaint(); // OSX 10.4 bug delays update of enabled until the next input
     }
 
-	public void paint(Graphics g) {
-		super.paint(g);
-		if (firstPaint) {
-			if (numberField!=null && IJ.isMacOSX()) {
-				// work around for bug on Intel Macs that caused 1st field to be un-editable
-				TextField tf = (TextField)(numberField.elementAt(0));
-				tf.setEditable(false);
-				tf.setEditable(true);
-			}
-			if (numberField==null && stringField==null)
-				okay.requestFocus();
-			firstPaint = false;
+	public void repaint() {
+		super.repaint();
+		if (imagePanels!=null) {
+			for (int i=0; i<imagePanels.size(); i++)
+				((ImagePanel)imagePanels.get(i)).repaint();
 		}
 	}
-    	
+
+	public void paint(Graphics g) {
+		super.paint(g);		
+		if (firstPaint && IJ.isMacOSX() && IJ.isJava18()) { // fix for incompletely drawn dialogs on Macs
+			EventQueue.invokeLater(new Runnable() {
+				public void run() {
+					IJ.wait(50);
+					Dimension size = getSize();
+					if (size!=null)
+						setSize(size.width+2,size.height+2);
+					firstPaint = false;
+				}
+			});
+		}
+	}
+
     public void windowClosing(WindowEvent e) {
-		wasCanceled = true; 
-		dispose(); 
+		wasCanceled = true;
+		dispose();
     }
-    
+
     /** Adds a "Help" button that opens the specified URL in the default browser.
     	With v1.46b or later, displays an HTML formatted message if
     	'url' starts with "<html>". There is an example at
@@ -1325,14 +1543,30 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
     }
 
 	void showHelp() {
-		if (helpURL.startsWith("<html>"))
-			new HTMLDialog(this, "", helpURL);
-		else {
+		if (helpURL.startsWith("<html>")) {	
+			if (this instanceof NonBlockingGenericDialog)
+				new HTMLDialog("", helpURL, false); // non blocking
+			else
+				new HTMLDialog(this, "", helpURL); //modal
+		} else {
 			String macro = "run('URL...', 'url="+helpURL+"');";
 			new MacroRunner(macro);
 		}
 	}
-    
+
+	protected boolean isMacro() {
+		return macro;
+	}
+
+	public static GenericDialog getInstance() {
+		return instance;
+	}
+
+	public void dispose() {
+		super.dispose();
+		instance = null;
+	}
+
     public void windowActivated(WindowEvent e) {}
     public void windowOpened(WindowEvent e) {}
     public void windowClosed(WindowEvent e) {}

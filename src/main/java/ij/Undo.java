@@ -12,14 +12,18 @@ import java.awt.image.*;
 public class Undo {
 
 	public static final int NOTHING = 0;
+	/** Undo using ImageProcessor.snapshot. */
 	public static final int FILTER = 1;
+	/** Undo using an ImageProcessor copy. */
 	public static final int TYPE_CONVERSION = 2;
 	public static final int PASTE = 3;
 	public static final int COMPOUND_FILTER = 4;
 	public static final int COMPOUND_FILTER_DONE = 5;
+	/** Undo using a single image, or composite color stack, copy (limited to 200MB). */
 	public static final int TRANSFORM = 6;
 	public static final int OVERLAY_ADDITION = 7;
 	public static final int ROI = 8;
+	public static final int MACRO = 9;
 	
 	private static int whatToUndo = NOTHING;
 	private static int imageID;
@@ -28,6 +32,7 @@ public class Undo {
 	private static Calibration calCopy;
 	private static Roi roiCopy;
 	private static double displayRangeMin, displayRangeMax;
+	private static LUT lutCopy;
 	
 	public static void setup(int what, ImagePlus imp) {
 		if (imp==null) {
@@ -35,7 +40,7 @@ public class Undo {
 			reset();
 			return;
 		}
-		//IJ.log(imp.getTitle() + ": set up undo (" + what + ")");
+		if (IJ.debugMode) IJ.log("Undo.setup: "+what+" "+imp);
 		if (what==FILTER && whatToUndo==COMPOUND_FILTER)
 				return;
 		if (what==COMPOUND_FILTER_DONE) {
@@ -49,7 +54,13 @@ public class Undo {
 			ipCopy = imp.getProcessor();
 			calCopy = (Calibration)imp.getCalibration().clone();
 		} else if (what==TRANSFORM) {	
+			if ((!IJ.macroRunning()||Prefs.supportMacroUndo) && (imp.getStackSize()==1||imp.getDisplayMode()==IJ.COMPOSITE) && imp.getSizeInBytes()<209715200)
+				impCopy = imp.duplicateAll();
+			else
+				reset();
+		} else if (what==MACRO) {	
 			impCopy = new ImagePlus(imp.getTitle(), imp.getProcessor().duplicate());
+			whatToUndo = TRANSFORM;
 		} else if (what==COMPOUND_FILTER) {
 			ImageProcessor ip = imp.getProcessor();
 			if (ip!=null)
@@ -71,13 +82,12 @@ public class Undo {
 		} else {
 			ipCopy = null;
 			ImageProcessor ip = imp.getProcessor();
-			//displayRangeMin = ip.getMin();
-			//displayRangeMax = ip.getMax();
-			//IJ.log("reset-filter: "+displayRangeMin+" "+displayRangeMax);
+			//lutCopy = (LUT)ip.getLut().clone();
 		}
 	}
 		
 	public static void reset() {
+		if (IJ.debugMode) IJ.log("Undo.reset: "+ whatToUndo+" "+impCopy);
 		if (whatToUndo==COMPOUND_FILTER || whatToUndo==OVERLAY_ADDITION)
 			return;
 		whatToUndo = NOTHING;
@@ -86,13 +96,13 @@ public class Undo {
 		impCopy = null;
 		calCopy = null;
 		roiCopy = null;
-		//IJ.log("Undo: reset");
+		lutCopy = null;
 	}
 	
 
 	public static void undo() {
 		ImagePlus imp = WindowManager.getCurrentImage();
-		//IJ.log(imp.getTitle() + ": undo (" + whatToUndo + ")  "+(imageID!=imp.getID()));
+		if (IJ.debugMode) IJ.log("Undo.undo: "+ whatToUndo+" "+imp+"  "+impCopy);
 		if (imp==null || imageID!=imp.getID()) {
 			if (imp!=null && !IJ.macroRunning()) { // does image still have an undo buffer?
 				ImageProcessor ip2 = imp.getProcessor();
@@ -108,8 +118,6 @@ public class Undo {
 				if (ip!=null) {
 					if (!IJ.macroRunning()) {
 						ip.swapPixelArrays();
-						//IJ.log("undo-filter: "+displayRangeMin+" "+displayRangeMax);
-						//ip.setMinAndMax(displayRangeMin,displayRangeMax);
 						imp.updateAndDraw();
 						return; // don't reset
 					} else {
@@ -132,13 +140,8 @@ public class Undo {
 				}
 				break;
 			case TRANSFORM:
-				if (impCopy!=null) {
-					if (swapImages(impCopy, imp)) {
-						imp.updateAndDraw();
-						return;
-					} else
-						imp.setProcessor(impCopy.getTitle(), impCopy.getProcessor());
-				}
+				if (impCopy!=null)
+					imp.setStack(impCopy.getStack());
 				break;
 			case PASTE:
 				Roi roi = imp.getRoi();

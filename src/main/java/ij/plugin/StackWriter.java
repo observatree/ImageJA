@@ -17,10 +17,11 @@ public class StackWriter implements PlugIn {
 
 	//private static String defaultDirectory = null;
 	private static String[] choices = {"BMP",  "FITS", "GIF", "JPEG", "PGM", "PNG", "Raw", "Text", "TIFF",  "ZIP"};
-	private static String fileType = "TIFF";
-	private static int ndigits = 4;
-	private static boolean useLabels;
-	private static boolean firstTime = true;
+	private static String staticFileType = "TIFF";
+	private String fileType = "TIFF";
+	private int ndigits = 4;
+	private boolean useLabels;
+	private boolean firstTime = true;
 	private int startAt;
 	private boolean hyperstack;
 	private int[] dim;
@@ -28,7 +29,7 @@ public class StackWriter implements PlugIn {
 
 	public void run(String arg) {
 		ImagePlus imp = WindowManager.getCurrentImage();
-		if (imp==null || (imp!=null && imp.getStackSize()<2)) {
+		if (imp==null || (imp!=null && imp.getStackSize()<2&&!IJ.isMacro())) {
 			IJ.error("Stack Writer", "This command requires a stack.");
 			return;
 		}
@@ -52,6 +53,8 @@ public class StackWriter implements PlugIn {
 		}
 		
 		GenericDialog gd = new GenericDialog("Save Image Sequence");
+		if (!IJ.isMacro())
+			fileType = staticFileType;
 		gd.addChoice("Format:", choices, fileType);
 		gd.addStringField("Name:", name, 12);
 		if (!hyperstack)
@@ -59,10 +62,13 @@ public class StackWriter implements PlugIn {
 		gd.addNumericField("Digits (1-8):", ndigits, 0);
 		if (!hyperstack)
 			gd.addCheckbox("Use slice labels as file names", useLabels);
+		gd.setSmartRecording(true);
 		gd.showDialog();
 		if (gd.wasCanceled())
 			return;
 		fileType = gd.getNextChoice();
+		if (!IJ.isMacro())
+			staticFileType = fileType;
 		name = gd.getNextString();
 		if (!hyperstack)
 			startAt = (int)gd.getNextNumber();
@@ -82,9 +88,7 @@ public class StackWriter implements PlugIn {
 			return;			
 		}
 		String format = fileType.toLowerCase(Locale.US);
-		if (format.equals("gif") && !FileSaver.okForGif(imp))
-			return;
-		else if (format.equals("fits") && !FileSaver.okForFits(imp))
+		if (format.equals("fits") && !FileSaver.okForFits(imp))
 			return;
 			
 		if (format.equals("text"))
@@ -112,8 +116,8 @@ public class StackWriter implements PlugIn {
 				}
 				if (!f.isDirectory() && (exists||directory.lastIndexOf(".")>directory.length()-5))
 					directory = f.getParent();
-				if (!directory.endsWith(File.separator))
-					directory += File.separator;
+				if (!(directory.endsWith(File.separator)||directory.endsWith("/")))
+					directory += "/";
 			}
 		}
 		if (directory==null) {
@@ -129,8 +133,8 @@ public class StackWriter implements PlugIn {
 		}
 		if (directory==null)
 			return;
-		
-		boolean isOverlay = imp.getOverlay()!=null && !imp.getHideOverlay();
+		Overlay overlay = imp.getOverlay();
+		boolean isOverlay = overlay!=null && !imp.getHideOverlay();
 		if (!(format.equals("jpeg")||format.equals("png")))
 			isOverlay = false;
 		ImageStack stack = imp.getStack();
@@ -184,6 +188,20 @@ public class StackWriter implements PlugIn {
 			}
 			if (Recorder.record)
 				Recorder.disablePathRecording();
+			imp2.setOverlay(null);
+			if (overlay!=null && format.equals("tiff")) {
+				Overlay overlay2 = overlay.duplicate();
+				overlay2.crop(i, i);
+				if (overlay2.size()>0) {
+					for (int j=0; j<overlay2.size(); j++) {
+						Roi roi = overlay2.get(j);
+						int pos = roi.getPosition();
+						if (pos==1)
+							roi.setPosition(i);
+					}
+					imp2.setOverlay(overlay2);
+				}
+			}
 			IJ.saveAs(imp2, format, path);
 		}
 		imp.unlock();

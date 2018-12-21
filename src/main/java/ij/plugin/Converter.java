@@ -14,12 +14,19 @@ public class Converter implements PlugIn {
 	public void run(String arg) {
 		imp = WindowManager.getCurrentImage();
 		if (imp!=null) {
-			if (imp.isComposite() && arg.equals("RGB Color"))
-				(new RGBStackConverter()).run("");
-			else if (imp.lock()) {
+			if (imp.isComposite() && arg.equals("RGB Color") && !imp.getStack().isRGB() && !imp.getStack().isHSB() && !imp.getStack().isLab()) {
+				if (imp.getWindow()==null && !ij.macro.Interpreter.isBatchMode())
+					RGBStackConverter.convertToRGB(imp);
+				else {
+					(new RGBStackConverter()).run("");
+					imp.setTitle(imp.getTitle()); // updates size in Window menu
+				}
+			} else if (imp.lock()) {
 				convert(arg);
 				imp.unlock();
-			}
+				imp.setTitle(imp.getTitle());
+			} else 
+				IJ.log("<<Converter: image is locked ("+imp+")>>");
 		} else
 			IJ.noImage();
 	}
@@ -37,7 +44,7 @@ public class Converter implements PlugIn {
 	 	long start = System.currentTimeMillis();
 	 	Roi roi = imp.getRoi();
 	 	imp.deleteRoi();
-	 	if (imp.getProcessor().getMinThreshold()!=ImageProcessor.NO_THRESHOLD)
+	 	if (imp.isThreshold())
 			imp.getProcessor().resetThreshold();
 	 	boolean saveChanges = imp.changes;
 		imp.changes = IJ.getApplet()==null; //if not applet, set 'changes' flag
@@ -52,6 +59,9 @@ public class Converter implements PlugIn {
 		    	} else if (stack.isHSB() && item.equals("RGB Color")) {
 					new ImageConverter(imp).convertHSBToRGB();
 					if (win!=null) new ImageWindow(imp, imp.getCanvas());
+		    	} else if (stack.isLab() && item.equals("RGB Color")) {
+					new ImageConverter(imp).convertLabToRGB();
+					if (win!=null) new ImageWindow(imp, imp.getCanvas());
 				} else if (item.equals("8-bit"))
 					new StackConverter(imp).convertToGray8();
 				else if (item.equals("16-bit"))
@@ -64,6 +74,8 @@ public class Converter implements PlugIn {
 					new StackConverter(imp).convertToRGBHyperstack();
 				else if (item.equals("HSB Stack"))
 					new StackConverter(imp).convertToHSBHyperstack();
+				else if (item.equals("Lab Stack"))
+					new StackConverter(imp).convertToLabHyperstack();
 		    	else if (item.equals("8-bit Color")) {
 		    		int nColors = getNumber();
 		    		if (nColors!=0)
@@ -86,6 +98,9 @@ public class Converter implements PlugIn {
 		    	} else if (item.equals("HSB Stack")) {
 			    	Undo.reset();
 					ic.convertToHSB();
+		    	} else if (item.equals("Lab Stack")) {
+			    	Undo.reset();
+					ic.convertToLab();
 		    	} else if (item.equals("RGB Color")) {
 					ic.convertToRGB();
 		    	} else if (item.equals("8-bit Color")) {
@@ -133,10 +148,11 @@ public class Converter implements PlugIn {
 			"32-bit -> RGB Color*\n" +
 			"8-bit Color -> 8-bit (grayscale)*\n" +
 			"8-bit Color -> RGB Color\n" +
-			"RGB Color -> 8-bit (grayscale)*\n" +
-			"RGB Color -> 8-bit Color*\n" +
-			"RGB Color -> RGB Stack*\n" +
-			"RGB Color -> HSB Stack*\n" +
+			"RGB -> 8-bit (grayscale)*\n" +
+			"RGB -> 8-bit Color*\n" +
+			"RGB -> RGB Stack*\n" +
+			"RGB -> HSB Stack*\n" +
+			"RGB -> Lab Stack\n" +
 			"RGB Stack -> RGB Color\n" +
 			"HSB Stack -> RGB Color\n" +
 			" \n" +

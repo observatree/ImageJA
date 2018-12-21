@@ -9,7 +9,7 @@ import java.awt.image.*;
 
 public class CompositeImage extends ImagePlus {
 
-	// Note: TRANSPARENT mode has not yet been implemented
+	/** Display modes (note: TRANSPARENT mode has not yet been implemented) */
 	public static final int COMPOSITE=1, COLOR=2, GRAYSCALE=3, TRANSPARENT=4;
 	public static final int MAX_CHANNELS = 7;
 	int[] rgbPixels;
@@ -56,8 +56,10 @@ public class CompositeImage extends ImagePlus {
 		} else
 			stack2 = imp.getImageStack();
 		int stackSize = stack2.getSize();
-		if (channels==1 && isRGB) channels = 3;
-		if (channels==1 && stackSize<=MAX_CHANNELS) channels = stackSize;
+		if (channels==1 && isRGB)
+			channels = 3;
+		if (channels==1 && stackSize<=MAX_CHANNELS && !imp.dimensionsSet)
+			channels = stackSize;
 		if (channels<1 || (stackSize%channels)!=0)
 			throw new IllegalArgumentException("stacksize not multiple of channels");
 		if (mode==COMPOSITE && channels>MAX_CHANNELS)
@@ -120,7 +122,12 @@ public class CompositeImage extends ImagePlus {
 			return getProcessor();
 	}
 
-	void setup(int channels, ImageStack stack2) {
+	synchronized void setup(int channels, ImageStack stack2) {
+		if (stack2!=null && stack2.getSize()>0 && (stack2.getProcessor(1) instanceof ColorProcessor)) { // RGB?
+			cip = null;
+			lut = null;
+			return;
+		}
 		setupLuts(channels);
 		if (mode==COMPOSITE) {
 			cip = new ImageProcessor[channels];
@@ -162,6 +169,8 @@ public class CompositeImage extends ImagePlus {
 	
 	public void resetDisplayRanges() {
 		int channels = getNChannels();
+		if (lut==null)
+			setupLuts(channels);
 		ImageStack stack2 = getImageStack();
 		if (lut==null || channels!=lut.length || channels>stack2.getSize() || channels>MAX_CHANNELS)
 			return;
@@ -186,7 +195,7 @@ public class CompositeImage extends ImagePlus {
 		int redValue, greenValue, blueValue;
 		int ch = getChannel();
 		
-		//IJ.log("CompositeImage.updateImage: "+ch+"/"+nChannels+" "+currentSlice+" "+currentFrame);
+		//IJ.log("updateImage: "+ch+"/"+nChannels+" "+currentSlice+" "+currentFrame);
 		if (ch>nChannels) ch = nChannels;
 		boolean newChannel = false;
 		if (ch-1!=currentChannel) {
@@ -201,7 +210,7 @@ public class CompositeImage extends ImagePlus {
 				setupLuts(nChannels);
 				LUT cm = lut[currentChannel];
 				if (mode==COLOR)
-					ip.setColorModel(cm);
+					ip.setLut(cm);
 				if (!(cm.min==0.0&&cm.max==0.0))
 					ip.setMinAndMax(cm.min, cm.max);
 				if (!IJ.isMacro()) ContrastAdjuster.update();
@@ -285,10 +294,7 @@ public class CompositeImage extends ImagePlus {
 			for (int i=1; i<nChannels; i++)
 				if (active[i]) cip[i].updateComposite(rgbPixels, 5);
 		}
-		if (IJ.isJava16())
-			createBufferedImage();
-		else
-			createImage();
+		createBufferedImage();
 		if (img==null && awtImage!=null)
 			img = awtImage;
 		singleChannel = false;
@@ -309,7 +315,6 @@ public class CompositeImage extends ImagePlus {
 			imageSource.newPixels();	
 	}
 
-	/** Uses less memory but only works correctly with Java 1.6 and later. */
 	void createBufferedImage() {
 		if (rgbSampleModel==null)
 			rgbSampleModel = getRGBSampleModel();
@@ -329,27 +334,6 @@ public class CompositeImage extends ImagePlus {
 		sampleModel = sampleModel.createCompatibleSampleModel(width, height);
 		return sampleModel;
 	}
-
-	/*
-	void createBlitterImage(int n) {
-		ImageProcessor ip = cip[n-1].duplicate();
-		if (ip instanceof FloatProcessor){
-			FloatBlitter fb = new FloatBlitter((FloatProcessor)ip);
-			for (int i=1; i<n; i++)
-				fb.copyBits(cip[i], 0, 0, Blitter.COPY_ZERO_TRANSPARENT);
-		} else if (ip instanceof ByteProcessor){
-			ByteBlitter bb = new ByteBlitter((ByteProcessor)ip);
-			for (int i=1; i<n; i++)
-				bb.copyBits(cip[i], 0, 0, Blitter.OR);
-		} else if (ip instanceof ShortProcessor){
-			ShortBlitter sb = new ShortBlitter((ShortProcessor)ip);
-			for (int i=n-2; i>=0; i--)
-				sb.copyBits(cip[i], 0, 0, Blitter. OR);
-		}
-		img = ip.createImage();
-		singleChannel = false;
-	}
-	*/
 
 	ImageStack getRGBStack(ImagePlus imp) {
 		ImageProcessor ip = imp.getProcessor();
@@ -525,6 +509,11 @@ public class CompositeImage extends ImagePlus {
 		setup(nChannels, getImageStack());
 	}
 	
+	public void completeReset() {
+		cip = null;
+		lut = null;
+	}
+	
 	/* Sets the LUT of the current channel. */
 	public void setChannelLut(LUT table) {
 		int c = getChannelIndex();
@@ -611,6 +600,32 @@ public class CompositeImage extends ImagePlus {
 		return customLuts && mode!=GRAYSCALE;
 	}
 	
+	public void close() {
+		super.close();
+		rgbPixels = null;
+		imageSource = null;
+		awtImage = null;
+		rgbRaster = null;
+		rgbSampleModel = null;
+		rgbImage = null;
+		rgbCM = null;
+		if (cip!=null) {
+			for (int i=0; i<cip.length; i++)
+				cip[i] = null;
+			cip = null;
+		}
+		if (lut!=null) {
+			for (int i=0; i<lut.length; i++)
+				lut[i] = null;
+			lut = null;
+		}
+		if (channelLuts!=null) {
+			for (int i=0; i<channelLuts.length; i++)
+				channelLuts[i] = null;
+			channelLuts = null;
+		}
+	}
+
 	/** Deprecated */
 	public synchronized void setChannelsUpdated() {
 		if (cip!=null) {

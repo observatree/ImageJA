@@ -65,7 +65,7 @@ public class Binner implements PlugIn {
 		}
 		if (zshrink>1 && !imp.isHyperStack())
 			stack2 = shrinkZ(stack2, zshrink);
-		ImagePlus imp2 = (ImagePlus)imp.clone();
+		ImagePlus imp2 = imp.createImagePlus();
 		imp2.setStack("Reduced "+imp.getShortTitle(), stack2);
 		Calibration cal2 = imp2.getCalibration();
 		if (cal2.scaled()) {
@@ -211,7 +211,7 @@ public class Binner implements PlugIn {
 			}
 			pixels[mj] = 0;
 		}
-		float max = 0f;
+		float max = -Float.MAX_VALUE;
 		for (int j=0; j<shrinksize; j++) {
 			if (pixels[j]>max)
 				max = pixels[j];
@@ -233,7 +233,7 @@ public class Binner implements PlugIn {
 	}
 
 	private float getMax(ImageProcessor ip, int x, int y) {
-		float max = 0f;
+		float max = -Float.MAX_VALUE;
 		float pixel;
 		for (int y2=0; y2<yshrink; y2++) {
 			for (int x2=0;  x2<xshrink; x2++) {
@@ -270,7 +270,7 @@ public class Binner implements PlugIn {
 		gd.addChoice ("Bin Method: ", methods, methods[method]);
 		if (imp.getStackSize()==1) {
 			gd.setInsets(5, 0, 0);
-			gd.addMessage("This command supports Undo");
+			gd.addMessage("This command supports Undo", null, Color.darkGray);
 		}
 		gd.showDialog();
 		if (gd.wasCanceled()) 

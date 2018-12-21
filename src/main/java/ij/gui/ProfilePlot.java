@@ -15,8 +15,8 @@ public class ProfilePlot {
 	static final double ASPECT_RATIO = 0.5;
 	private double min, max;
 	private boolean minAndMaxCalculated;
-    private static double fixedMin = Prefs.getDouble("pp.min",0.0);
-    private static double fixedMax = Prefs.getDouble("pp.max",0.0);
+	private static double fixedMin;
+	private static double fixedMax;
     
 	protected ImagePlus imp;
 	protected double[] profile;
@@ -71,14 +71,6 @@ public class ProfilePlot {
 		else
 			magnification = 1.0;
 	}
-
-	//void calibrate(Calibration cal) {
-	//	float[] cTable = cal.getCTable();
-	//	if (cTable!=null)
-	//		for ()
-	//			profile[i] = profile[i];
-	//	
-	//}
 	
 	/** Returns the size of the plot that createWindow() creates. */
 	public Dimension getPlotSize() {
@@ -101,15 +93,13 @@ public class ProfilePlot {
 	/** Displays this profile plot in a window. */
 	public void createWindow() {
 		Plot plot = getPlot();
-		if (plot==null) return;
-		plot.setSourceImageID(imp.getID());
-		plot.show();
+		if (plot!=null)
+			plot.show();
 	}
 	
-	Plot getPlot() {
+	public Plot getPlot() {
 		if (profile==null)
 			return null;
-		Dimension d = getPlotSize();
 		String xLabel = "Distance ("+units+")";
   		int n = profile.length;
   		if (xValues==null) {
@@ -179,11 +169,14 @@ public class ProfilePlot {
 			double[] values = line.getPixels();
 			if (values==null) return null;
 			if (cal!=null && cal.pixelWidth!=cal.pixelHeight) {
-				double dx = cal.pixelWidth*(line.x2 - line.x1);
-				double dy = cal.pixelHeight*(line.y2 - line.y1);
-				double length = Math.round(Math.sqrt(dx*dx + dy*dy));
-				if (values.length>1)
-					xInc = length/(values.length-1);
+				FloatPolygon p = line.getFloatPoints();
+				double dx = p.xpoints[1] - p.xpoints[0];
+				double dy = p.ypoints[1] - p.ypoints[0];
+				double pixelLength = Math.sqrt(dx*dx + dy*dy);
+				dx = cal.pixelWidth*dx;
+				dy = cal.pixelHeight*dy;
+				double calibratedLength = Math.sqrt(dx*dx + dy*dy);
+				xInc = calibratedLength * 1.0/pixelLength;
 			}
 			return values;
 	}
@@ -209,7 +202,7 @@ public class ProfilePlot {
 		return profile;
 	}
 	
-	double[] getColumnAverageProfile(Rectangle rect, ImageProcessor ip) {
+	public static double[] getColumnAverageProfile(Rectangle rect, ImageProcessor ip) {
 		double[] profile = new double[rect.width];
 		int[] counts = new int[rect.width];
 		double[] aLine;
@@ -281,6 +274,8 @@ public class ProfilePlot {
 		ImageProcessor ip2 = (new Straightener()).straightenLine(imp, lineWidth);
 		int width = ip2.getWidth();
 		int height = ip2.getHeight();
+		if (ip2 instanceof FloatProcessor)
+			return getColumnAverageProfile(new Rectangle(0,0,width,height),ip2);
 		profile = new double[width];
 		double[] aLine;
 		ip2.setInterpolate(false);

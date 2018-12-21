@@ -1,8 +1,10 @@
 package ij.util;
+import ij.process.*;
 import java.awt.Color;
 import java.util.*;
 import java.io.*;
 import java.util.Comparator;
+import java.nio.channels.FileChannel;
 
 /** This class contains static utility methods. */
  public class Tools {
@@ -33,6 +35,22 @@ import java.util.Comparator;
 		return new String(buf9);
 	}
 		
+	/** Converts an int to a zero-padded hex string of fixed length 'digits'. 
+	 *  If the number is too high, it gets truncated, keeping only the lowest 'digits' characters. */
+	public static String int2hex(int i, int digits) {
+		char[] buf = new char[digits];
+		for (int pos=buf.length-1; pos>=0; pos--) {
+			buf[pos] = hexDigits[i&0xf];
+			i >>>= 4;
+		}
+		return new String(buf);
+	}
+
+	public static ImageStatistics getStatistics(double[] a) {
+		ImageProcessor ip = new FloatProcessor(a.length, 1, a);
+		return ip.getStats();
+	}
+
 	public static double[] getMinMax(double[] a) {
 		double min = Double.MAX_VALUE;
 		double max = -Double.MAX_VALUE;
@@ -78,6 +96,8 @@ import java.util.Comparator;
 	
 	/** Converts the double array 'a' to a float array. */
 	public static float[] toFloat(double[] a) {
+		if (a==null)
+			return null;
 		int len = a.length;
 		float[] f = new float[len];
 		for (int i=0; i<len; i++)
@@ -87,6 +107,8 @@ import java.util.Comparator;
 	
 	/** Converts carriage returns to line feeds. */
 	public static String fixNewLines(String s) {
+		if (s==null)
+			return null;
 		char[] chars = s.toCharArray();
 		for (int i=0; i<chars.length; i++)
 			{if (chars[i]=='\r') chars[i] = '\n';}
@@ -123,24 +145,39 @@ import java.util.Comparator;
 		return parseDouble(s, Double.NaN);
 	}
 	
-	/** Returns the number of decimal places need to display two numbers. */
-	public static int getDecimalPlaces(double n1, double n2) {
-		if (Math.round(n1)==n1 && Math.round(n2)==n2)
+	/** Returns the number of decimal places needed to display a 
+		number, or -2 if exponential notation should be used. */
+	public static int getDecimalPlaces(double n) {
+		if ((int)n==n || Double.isNaN(n))
 			return 0;
-		else {
-			n1 = Math.abs(n1);
-			n2 = Math.abs(n2);
-		    double n = n1<n2&&n1>0.0?n1:n2;
-		    double diff = Math.abs(n2-n1);
-		    if (diff>0.0 && diff<n) n = diff;		    
-			int digits = 2;
-			if (n<100.0) digits = 3;
-			if (n<0.1) digits = 4;
-			if (n<0.01) digits = 5;
-			if (n<0.001) digits = 6;
-			if (n<0.0001) digits = 7;
+		String s = ""+n;
+		if (s.contains("E"))
+			return -2;
+		while (s.endsWith("0"))
+			s = s.substring(0,s.length()-1);
+		int index = s.indexOf(".");
+		if (index==-1) return 0;
+		int digits = s.length() - index - 1;
+		if (digits>4) digits=4;
+		return digits;
+	}
+	
+	/** Returns the number of decimal places needed to display two numbers,
+		or -2 if exponential notation should be used. */
+	public static int getDecimalPlaces(double n1, double n2) {
+		if ((int)n1==n1 && (int)n2==n2)
+			return 0;
+		int digits = getDecimalPlaces(n1);
+		int digits2 = getDecimalPlaces(n2);
+		if (digits==0)
+			return digits2;
+		if (digits2==0)
 			return digits;
-		}
+		if (digits<0 || digits2<0)
+			return digits;
+		if (digits2>digits)
+			digits = digits2;
+		return digits;
 	}
 	
 	/** Splits a string into substrings using the default delimiter set, 
@@ -158,29 +195,26 @@ import java.util.Comparator;
 		int tokens = t.countTokens();
 		String[] strings;
 		if (tokens>0) {
-       		strings = new String[tokens];
-        	for(int i=0; i<tokens; i++) 
-        		strings[i] = t.nextToken();
-        } else {
-        	strings = new String[1];
-        	strings[0] = str;
-        	tokens = 1;
-        }
+			strings = new String[tokens];
+			for(int i=0; i<tokens; i++) 
+				strings[i] = t.nextToken();
+		} else
+			strings = new String[0];
 		return strings;
 	}
 	
 	static String[] splitLines(String str) {
 		Vector v = new Vector();
-        try {
-            BufferedReader br  = new BufferedReader(new StringReader(str));
-            String line;
-            while (true) {
-                line = br.readLine();
-                if (line == null) break;
-                v.addElement(line);
-            }
-            br.close();
-        } catch(Exception e) { }
+		try {
+			BufferedReader br  = new BufferedReader(new StringReader(str));
+			String line;
+			while (true) {
+				line = br.readLine();
+				if (line == null) break;
+				v.addElement(line);
+			}
+			br.close();
+		} catch(Exception e) { }
 		String[] lines = new String[v.size()];
 		v.copyInto((String[])lines);
 		return lines;
@@ -225,11 +259,70 @@ import java.util.Comparator;
 		return indexes2;
 	}
 	
-	/** Opens a text file in ij.jar as a String (example path: "/macros/Macro_Tool.txt"). */
+	/** Returns an array linearly resampled to a different length. */
+	public static double[] resampleArray(double[] y1, int len2) {
+		int len1 = y1.length;
+		double factor =  (double)(len2-1)/(len1-1);
+		double[] y2 = new double[len2];
+		if(len1 == 0){
+		    return y2;
+		}
+		if(len1 == 1){
+		    for (int jj=0; jj<len2; jj++)
+			    y2[jj] = y1[0];
+		    return(y2);
+		}
+		double[] f1 = new double[len1];//fractional positions
+		double[] f2 = new double[len2];
+		for (int jj=0; jj<len1; jj++)
+			f1[jj] = jj*factor;
+		for (int jj=0; jj<len2; jj++)
+			f2[jj] = jj/factor;
+		for (int jj=0; jj<len2-1; jj++) {
+			double pos = f2[jj];
+			int leftPos = (int)Math.floor(pos);
+			int rightPos = (int)Math.floor(pos)+1;
+			double fraction = pos-Math.floor(pos);
+			double value = y1[leftPos] + fraction*(y1[rightPos]-y1[leftPos]);
+			y2[jj] = value;
+		}
+		y2[len2-1] = y1[len1-1];
+		return y2;
+	}
+
+	/** Opens a text file in ij.jar as a String (example path: "/macros/Circle_Tool.txt"). */
 	public static String openFromIJJarAsString(String path) {
 		return (new ij.plugin.MacroInstaller()).openFromIJJar(path);
 	}
 
-
+	/** Copies the contents of the file at 'path1' to 'path2', returning an error message
+		(as a non-empty string) if there is an error. Based on the method with the
+		same name in Tobias Pietzsch's TifBenchmark class.
+	*/
+	public static String copyFile(String path1, String path2) {
+		File f1 = new File(path1);
+		File f2 = new File(path2);	
+		try {
+			if (!f1.exists() )
+				return "Source file does not exist";
+			if (!f2.exists() )
+				f2.createNewFile();
+			long time = f1.lastModified();	
+			FileInputStream stream1 = new FileInputStream(f1);
+			FileChannel channel1 = stream1.getChannel();
+			FileOutputStream stream2 = new FileOutputStream(f2);
+			final FileChannel channel2 = stream2.getChannel();
+			if (channel2!=null && channel1!=null )
+				channel2.transferFrom(channel1, 0, channel1.size());
+			channel1.close();
+			stream1.close();
+			channel2.close();
+			stream2.close();	
+			f2.setLastModified(time);
+		} catch(Exception e) {
+			return e.getMessage();
+		}
+		return "";
+	}
 
 }

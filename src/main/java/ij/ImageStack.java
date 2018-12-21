@@ -21,6 +21,7 @@ public class ImageStack {
 	private double min=Double.MAX_VALUE;
 	private double max;
 	private float[] cTable;
+	private int viewers;
 	
 	/** Default constructor. */
 	public ImageStack() { }
@@ -50,7 +51,7 @@ public class ImageStack {
 		nSlices = 0;
 	}
 
-	/** Adds an image in the forma of a pixel array to the end of the stack. */
+	/** Adds an image in the form of a pixel array to the end of the stack. */
 	public void addSlice(String sliceLabel, Object pixels) {
 		if (pixels==null) 
 			throw new IllegalArgumentException("'pixels' is null!");
@@ -68,16 +69,21 @@ public class ImageStack {
 		}
 		stack[nSlices-1] = pixels;
 		this.label[nSlices-1] = sliceLabel;
-		if (type==UNKNOWN) {
-			if (pixels instanceof byte[])
-				type = BYTE;
-			else if (pixels instanceof short[])
-				type = SHORT;
-			else if (pixels instanceof float[])
-				type = FLOAT;
-			else if (pixels instanceof int[])
-				type = RGB;
-		}
+		if (type==UNKNOWN)
+			setType(pixels);
+	}
+	
+	private void setType(Object pixels) {
+		if (pixels==null)
+			return;
+		if (pixels instanceof byte[])
+			type = BYTE;
+		else if (pixels instanceof short[])
+			type = SHORT;
+		else if (pixels instanceof float[])
+			type = FLOAT;
+		else if (pixels instanceof int[])
+			type = RGB;
 	}
 	
 	/**
@@ -97,7 +103,7 @@ public class ImageStack {
 		the string 'sliceLabel' as the slice metadata. */
 	public void addSlice(String sliceLabel, ImageProcessor ip) {
 		if (ip.getWidth()!=width || ip.getHeight()!=height)
-			throw new IllegalArgumentException("Dimensions do not match");
+			throw new IllegalArgumentException("ImageStack.addSlice(): dimensions do not match");
 		if (nSlices==0) {
 			cm = ip.getColorModel();
 			min = ip.getMin();
@@ -187,6 +193,8 @@ public class ImageStack {
 		if (n<1 || n>nSlices)
 			throw new IllegalArgumentException(outOfRange+n);
 		stack[n-1] = pixels;
+		if (type==UNKNOWN)
+			setType(pixels);
 	}
 	
 	/** Returns the stack as an array of 1D pixel arrays. Note
@@ -200,6 +208,11 @@ public class ImageStack {
 	/** Returns the number of slices in this stack. */
 	public int getSize() {
 		return nSlices;
+	}
+
+	/** Returns the number of slices in this stack. */
+	public int size() {
+		return getSize();
 	}
 
 	/** Returns the slice labels as an array of Strings. Note
@@ -256,15 +269,15 @@ public class ImageStack {
 			throw new IllegalArgumentException(outOfRange+n);
 		if (nSlices==0)
 			return null;
-		if (stack[0]==null)
+		if (stack[n-1]==null)
 			throw new IllegalArgumentException("Pixel array is null");
-		if (stack[0] instanceof byte[])
+		if (stack[n-1] instanceof byte[])
 			ip = new ByteProcessor(width, height, null, cm);
-		else if (stack[0] instanceof short[])
+		else if (stack[n-1] instanceof short[])
 			ip = new ShortProcessor(width, height, null, cm);
-		else if (stack[0] instanceof int[])
+		else if (stack[n-1] instanceof int[])
 			ip = new ColorProcessor(width, height, null);
-		else if (stack[0] instanceof float[])
+		else if (stack[n-1] instanceof float[])
 			ip = new FloatProcessor(width, height, null, cm);		
 		else
 			throw new IllegalArgumentException("Unknown stack type");
@@ -276,6 +289,18 @@ public class ImageStack {
 		return ip;
 	}
 	
+	/** Assigns the pixel array of an ImageProcessor to the
+		 specified slice, were 1<=n<=nslices. */
+	public void setProcessor(ImageProcessor ip, int n) {
+		if (n<1 || n>nSlices)
+			throw new IllegalArgumentException(outOfRange+n);
+		if (type!=UNKNOWN && type!=getType(ip))
+			throw new IllegalArgumentException("Wrong type for this stack");
+		if (ip.getWidth()!=width || ip.getHeight()!=height)
+			throw new IllegalArgumentException("Wrong dimensions for this stack");
+		stack[n-1] = ip.getPixels();
+	}
+
 	/** Assigns a new color model to this stack. */
 	public void setColorModel(ColorModel cm) {
 		this.cm = cm;
@@ -286,20 +311,19 @@ public class ImageStack {
 		return cm;
 	}
 	
-	/** Returns true if this is a 3-slice RGB stack. */
+	/** Returns true if this is a 3-slice, 8-bit RGB stack. */
 	public boolean isRGB() {
-    	if (nSlices==3 && (stack[0] instanceof byte[]) && getSliceLabel(1)!=null && getSliceLabel(1).equals("Red"))	
-			return true;
-		else
-			return false;
+    	return nSlices==3 && (stack[0] instanceof byte[]) && getSliceLabel(1)!=null && getSliceLabel(1).equals("Red");
 	}
 	
 	/** Returns true if this is a 3-slice HSB stack. */
 	public boolean isHSB() {
-    	if (nSlices==3 && getSliceLabel(1)!=null && getSliceLabel(1).equals("Hue"))	
-			return true;
-		else
-			return false;
+    	return nSlices==3 && getSliceLabel(1)!=null && getSliceLabel(1).equals("Hue");
+	}
+
+	/** Returns true if this is a Lab stack. */
+	public boolean isLab() {
+    	return nSlices==3 && getSliceLabel(1)!=null && getSliceLabel(1).equals("L*");	
 	}
 
 	/** Returns true if this is a virtual (disk resident) stack. 
@@ -322,7 +346,12 @@ public class ImageStack {
 		return ("stack["+getWidth()+"x"+getHeight()+"x"+getSize()+v+"]");
 	}
 	
-	/** Returns, as a double, the specified voxel. */
+	/** Returns, as a double, the specified voxel. Returns
+	 * NaN if x, y or z are beyond the stack limits. Use the
+	 * ImagePlus.getStackIndex() method to convert a C,Z,T
+	 * hyperstack position (one-based) into a z index (zero-based).
+	 * @see ij.ImagePlus#getStackIndex
+	*/
 	public final double getVoxel(int x, int y, int z) {
 		if (x>=0 && x<width && y>=0 && y<height && z>=0 && z<nSlices) {
 			switch (type) {
@@ -338,10 +367,10 @@ public class ImageStack {
 				case RGB:
 					int[] ints = (int[])stack[z];
 					return ints[y*width+x]&0xffffffff;
-				default: return 0.0;
+				default: return Double.NaN;
 			}
 		} else
-			return 0.0;
+			throw new IndexOutOfBoundsException();
 	}
 		
 	/* Sets the value of the specified voxel. */
@@ -376,7 +405,6 @@ public class ImageStack {
 		}
 	}
 	
-	/** Experimental */
 	public float[] getVoxels(int x0, int y0, int z0, int w, int h, int d, float[] voxels) {
 		boolean inBounds = x0>=0 && x0+w<=width && y0>=0 && y0+h<=height && z0>=0 && z0+d<=nSlices;
 		if (voxels==null || voxels.length!=w*h*d)
@@ -420,7 +448,6 @@ public class ImageStack {
 		return voxels;
 	}
 
-	/** Experimental */
 	public float[] getVoxels(int x0, int y0, int z0, int w, int h, int d, float[] voxels, int channel) {
 		if (getBitDepth()!=24)
 			return getVoxels(x0, y0, z0, w, h, d, voxels);
@@ -555,6 +582,8 @@ public class ImageStack {
 	
 	/** Returns the bit depth (8=byte, 16=short, 24=RGB, 32=float). */
 	public int getBitDepth() {
+		if (type==UNKNOWN && stack!=null && stack.length>0)
+			setType(stack[0]);
 		switch (type) {
 			case BYTE: return 8;
 			case SHORT: return 16;
@@ -562,6 +591,17 @@ public class ImageStack {
 			case RGB: return 24;
 		}
 		return 0;
+	}
+	
+	private int getType(ImageProcessor ip) {
+		int bitDepth = ip.getBitDepth();
+		switch (bitDepth) {
+			case 8: return BYTE;
+			case 16: return SHORT;
+			case 32: return FLOAT;
+			case 24: return RGB;
+		}
+		return UNKNOWN;
 	}
 
 	/** Creates a new ImageStack.
@@ -577,6 +617,42 @@ public class ImageStack {
 			stack.max = 0.0;
 		}
 		return stack;
+	 }
+	 
+	/** Duplicates this stack. */
+	 public ImageStack duplicate() {
+	 	return crop(0, 0, 0, width, height, getSize());
+	 }
+	 
+	/** Creates a new stack by cropping this one. */
+	 public ImageStack crop(int x, int y, int z, int width, int height, int depth) {
+	 	if (x<0||y<0||z<0||x+width>this.width||y+height>this.height||z+depth>getSize())
+	 		throw new IllegalArgumentException("Argument out of range");
+		ImageStack stack2 = new ImageStack(width, height, getColorModel());
+		for (int i=z; i<z+depth; i++) {
+			ImageProcessor ip2 = this.getProcessor(i+1);
+			ip2.setRoi(x, y, width, height);
+			ip2 = ip2.crop();
+			stack2.addSlice(this.getSliceLabel(i+1), ip2);
+		}
+		return stack2;
+	 }
+	 
+	/** Creates a float version of this stack. */
+	 public ImageStack convertToFloat() {
+		ImageStack stack2 = new ImageStack(width, height, getColorModel());
+		for (int i=1; i<=getSize(); i++) {
+			ImageProcessor ip2 = this.getProcessor(i);
+			ip2 = ip2.convertToFloat();
+			stack2.addSlice(this.getSliceLabel(i), ip2);
+		}
+		return stack2;
+	 }
+	 
+	 int viewers(int inc) {
+	 	viewers += inc;
+	 	if (IJ.debugMode) IJ.log("stack.viewers: "+viewers);
+	 	return viewers;
 	 }
 
 }

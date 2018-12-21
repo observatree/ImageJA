@@ -15,6 +15,7 @@ public class PlugInFilterRunner implements Runnable, DialogListener {
 	private ImagePlus imp;
 	private int flags;							// the flags returned by the PlugInFilter
 	private boolean snapshotDone;		// whether the ImageProcessor has a snapshot already
+	private Overlay originalOverlay;		// overlay before pressing 'preview', to revert
 	private boolean previewCheckboxOn;			// the state of the preview checkbox (true = on)
 	private boolean bgPreviewOn;		// tells the background thread that preview is allowed
 	private boolean bgKeepPreview;		// tells the background thread to keep the result of preview
@@ -53,7 +54,8 @@ public class PlugInFilterRunner implements Runnable, DialogListener {
 		if (imp != null) {
 			roi = imp.getRoi();
 			if (roi!=null) roi.endPaste();				// prepare the image: finish previous paste operation (if any)
-			if (!imp.lock()) return;					// exit if image is in use
+			if (!imp.lock())
+				return;					// exit if image is in use
 			nPasses = ((flags&PlugInFilter.CONVERT_TO_FLOAT)!=0) ? imp.getProcessor().getNChannels():1;
 		}
 		if (theFilter instanceof ExtendedPlugInFilter) { // calling showDialog required?
@@ -78,7 +80,8 @@ public class PlugInFilterRunner implements Runnable, DialogListener {
 			}
 		} // if ExtendedPlugInFilter
 		if ((flags&PlugInFilter.DONE)!=0) {
-			if (imp != null) imp.unlock();
+			if (imp != null)
+				imp.unlock();
 			return;
 		} else if (imp==null) {
 			((PlugInFilter)theFilter).run(null);		// not DONE, but NO_IMAGE_REQUIRED
@@ -118,7 +121,8 @@ public class PlugInFilterRunner implements Runnable, DialogListener {
 				if ((flags&PlugInFilter.NO_CHANGES)==0&&(flags&PlugInFilter.KEEP_THRESHOLD)==0)
 					ip.resetBinaryThreshold();
 			} else {  //  stack
-				Undo.reset();	 // no undo for processing a complete stack
+				if ((flags&PlugInFilter.NO_UNDO_RESET)==0)
+					Undo.reset();	 // no undo for processing a complete stack
 				IJ.resetEscape();
 				int slicesToDo = processedAsPreview!=0 ? slices-1 : slices;
 				nPasses *= slicesToDo;
@@ -325,8 +329,8 @@ public class PlugInFilterRunner implements Runnable, DialogListener {
 		}
 		if (IJ.debugMode)
 			IJ.log("  main thread "+y1+"-"+(roi.y+roi.height));
-		ip.setRoi(new Rectangle(roi.x, y1, roi.width, roi.y+roi.height-y1));
-		((PlugInFilter)theFilter).run(ip);	// the current thread does the rest
+		Rectangle roi2 = new Rectangle(roi.x, y1, roi.width, roi.y+roi.height-y1);
+		((PlugInFilter)theFilter).run(duplicateProcessor(ip, roi2)); 	// current thread does the rest
 		pass++;
 		if (roisForThread != null) {
 			for (Enumeration<Thread> en = roisForThread.keys(); en.hasMoreElements();) {
@@ -476,6 +480,7 @@ public class PlugInFilterRunner implements Runnable, DialogListener {
 		Thread thread = Thread.currentThread();
 		ImageProcessor ip = imp.getProcessor();
 		Roi originalRoi = imp.getRoi();
+		originalOverlay = imp.getOverlay();
 		FloatProcessor fp = null;
 		prepareProcessor(ip, imp);
 		announceSliceNumber(imp.getCurrentSlice());
@@ -551,6 +556,7 @@ public class PlugInFilterRunner implements Runnable, DialogListener {
 				interruptRoiThreads(roisForThread);
 		}
 		waitForPreviewDone();
+		imp.setOverlay(originalOverlay);
 	}
 
 	/** stop the background process responsible for preview and wait until the preview thread has finished */

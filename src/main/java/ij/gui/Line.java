@@ -6,6 +6,8 @@ import ij.plugin.Straightener;
 import ij.plugin.frame.Recorder;
 import java.awt.*;
 import java.awt.image.*;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.awt.event.*;
 import java.awt.geom.*;
 
@@ -59,8 +61,7 @@ public class Line extends Roi {
 		type = LINE;
 		if (!(this instanceof Arrow) && lineWidth>1)
 			updateWideLine(lineWidth);
-		if (Prefs.subPixelResolution)
-			drawOffset = true;
+		drawOffset = Prefs.subPixelResolution;
 	}
 
 	/**
@@ -83,13 +84,15 @@ public class Line extends Roi {
 
 	protected void handleMouseUp(int screenX, int screenY) {
 		mouseUpCount++;
-		if (mouseUpCount==1 && !dragged)
+		if (Prefs.enhancedLineTool && mouseUpCount==1 && !dragged)
 			return;
 		state = NORMAL;
 		if (imp==null) return;
 		imp.draw(clipX-5, clipY-5, clipWidth+10, clipHeight+10);
-		if (Recorder.record)
-			Recorder.record("makeLine", x1, y1, x2, y2);
+		if (Recorder.record) {
+			String method = (this instanceof Arrow)?"makeArrow":"makeLine";
+			Recorder.record(method, x1, y1, x2, y2);
+		}
 		if (getLength()==0.0)
 			imp.deleteRoi();
 	}
@@ -340,6 +343,15 @@ public class Line extends Roi {
 	/** Draws this line on the image. */
 	public void draw(Graphics g) {
 		Color color =  strokeColor!=null? strokeColor:ROIColor;
+		boolean isActiveOverlayRoi = !overlay && isActiveOverlayRoi();
+		if (isActiveOverlayRoi) {
+			if (color==Color.cyan)
+				color = Color.magenta;
+			else
+				color = Color.cyan;
+		}
+		double x = getXBase();
+		double y = getYBase();
 		g.setColor(color);
 		x1d=x+x1R; y1d=y+y1R; x2d=x+x2R; y2d=y+y2R;
 		x1=(int)x1d; y1=(int)y1d; x2=(int)x2d; y2=(int)y2d;
@@ -351,7 +363,7 @@ public class Line extends Roi {
 		int sx3 = sx1 + (sx2-sx1)/2;
 		int sy3 = sy1 + (sy2-sy1)/2;
 		Graphics2D g2d = (Graphics2D)g;
-		if (stroke!=null)
+		if (stroke!=null && !isActiveOverlayRoi) 
 			g2d.setStroke(getScaledStroke());
 		g.drawLine(sx1, sy1, sx2, sy2);
 		if (wideLine && !overlay) {
@@ -369,9 +381,13 @@ public class Line extends Roi {
 			drawHandle(g, sx3-size2, sy3-size2);
 		}
 		if (state!=NORMAL)
-			IJ.showStatus(imp.getLocationAsString(x2,y2)+", angle=" + IJ.d2s(getAngle(x1,y1,x2,y2)) + ", length=" + IJ.d2s(getLength()));
+			IJ.showStatus(imp.getLocationAsString(x2,y2)+", angle=" + IJ.d2s(getAngle()) + ", length=" + IJ.d2s(getLength()));
 		if (updateFullWindow)
 			{updateFullWindow = false; imp.draw();}
+	}
+	
+	public double getAngle() {
+		return getFloatAngle(x1d, y1d, x2d, y2d);
 	}
 
 	/** Returns the length of this line. */
@@ -398,9 +414,11 @@ public class Line extends Roi {
 				profile = ip.getLine(x1d, y1d, x2d, y2d);
 			} else {
 				ImageProcessor ip2 = (new Straightener()).rotateLine(imp,(int)getStrokeWidth());
-				if (ip2==null) return null;
+				if (ip2==null) return new double[0];
 				int width = ip2.getWidth();
 				int height = ip2.getHeight();
+				if (ip2 instanceof FloatProcessor)
+					return ProfilePlot.getColumnAverageProfile(new Rectangle(0,0,width,height),ip2);
 				profile = new double[width];
 				double[] aLine;
 				ip2.setInterpolate(false);
@@ -415,12 +433,43 @@ public class Line extends Roi {
 			return profile;
 	}
 	
+	/** Returns, as a Polygon, the two points that define this line. */
+	public Polygon getPoints() {
+		Polygon p = new Polygon();
+		p.addPoint((int)Math.round(x1d), (int)Math.round(y1d));
+		p.addPoint((int)Math.round(x2d), (int)Math.round(y2d));
+		return p;
+	}
+
+	/** Returns, as a FloatPolygon, the two points that define this line. */
+	public FloatPolygon getFloatPoints() {
+		FloatPolygon p = new FloatPolygon();
+		p.addPoint((float)x1d, (float)y1d);
+		p.addPoint((float)x2d, (float)y2d);
+		return p;
+	}
+
+	/** If the width of this line is less than or equal to one, returns the
+	 * starting and ending coordinates as a 2-point Polygon, or, if
+	 * the width is greater than one, returns an outline of the line as
+	 * a 4-point Polygon.
+	 * @see #getFloatPolygon
+	 * @see #getPoints
+	 */
 	public Polygon getPolygon() {
 		FloatPolygon p = getFloatPolygon();
 		return new Polygon(toIntR(p.xpoints), toIntR(p.ypoints), p.npoints);
 	}
 
+	/** If the width of this line is less than or equal to one, returns the
+	 * starting and ending coordinates as a 2-point FloatPolygon, or, if
+	 * the width is greater than one, returns an outline of the line as
+	 * a 4-point FloatPolygon.
+	 * @see #getFloatPoints
+	 */
 	public FloatPolygon getFloatPolygon() {
+		double x = getXBase();
+		double y = getYBase();
 		x1d=x+x1R; y1d=y+y1R; x2d=x+x2R; y2d=y+y2R;
 		FloatPolygon p = new FloatPolygon();
 		if (getStrokeWidth()<=1) {
@@ -444,9 +493,16 @@ public class Line extends Roi {
 		}
 		return p;
 	}
+	
+	/** Returns the number of points in this selection; equivalent to getPolygon().npoints. */
+	public int size() {
+		return getStrokeWidth()<=1?2:4;
+	}
 
 	public void drawPixels(ImageProcessor ip) {
 		ip.setLineWidth(1);
+		double x = getXBase();
+		double y = getYBase();
 		x1d=x+x1R; y1d=y+y1R; x2d=x+x2R; y2d=y+y2R;
 		double offset = getOffset(0.5);
 		if (getStrokeWidth()<=1) {
@@ -556,6 +612,7 @@ public class Line extends Roi {
 			case KeyEvent.VK_RIGHT: x2R+=inc; break;
 		}
 		grow(ic.screenXD(x+x2R), ic.screenYD(y+y2R));
+		notifyListeners(RoiListener.MOVED);
 	}
 	
 	public boolean getDrawOffset() {
@@ -564,6 +621,106 @@ public class Line extends Roi {
 	
 	public void setDrawOffset(boolean drawOffset) {
 		this.drawOffset = drawOffset;
+	}
+
+	/** Always returns true. */
+	public boolean subPixelResolution() {
+		return true;
+	}
+	
+	public void setLocation(int x, int y) {
+		super.setLocation(x, y);
+		double xx = getXBase();
+		double yy = getYBase();
+		x1d=xx+x1R; y1d=yy+y1R; x2d=xx+x2R; y2d=yy+y2R;
+		x1=(int)x1d; y1=(int)y1d; x2=(int)x2d; y2=(int)y2d;
+	}
+	
+	public FloatPolygon getRotationCenter() {
+		double xcenter = x1d + (x2d-x1d)/2.0;
+		double ycenter = y1d + (y2d-y1d)/2.0;
+		FloatPolygon p = new FloatPolygon();
+		p.addPoint(xcenter,ycenter);
+		return p;
+	}
+	
+	/**
+	 * Dedicated point iterator for thin lines.
+	 * The iterator is based on (an improved version of) the algorithm used by
+	 * the original method {@code ImageProcessor.getLine(double, double, double, double)}.
+	 * Improvements are (a) that the endpoint is drawn too and (b) every line
+	 * point is visited only once, duplicates are skipped.
+	 * 
+	 * Author: Wilhelm Burger (04/2017)
+	*/
+	public static class PointIterator implements Iterator<Point> {
+		private double x1, y1;
+		private final int n;
+		private final double xinc, yinc;
+		private double x, y;
+		private int u, v;
+		private int u_prev, v_prev;
+		private int i;
+
+		public PointIterator(Line line) {
+			this(line.x1d, line.y1d, line.x2d, line.y2d);
+		}
+		
+		public PointIterator(double x1, double y1, double x2, double y2) {
+			this.x1 = x1;
+			this.y1 = y1;
+			double dx = x2 - x1;
+			double dy = y2 - y1;
+			this.n = (int) Math.ceil(Math.sqrt(dx * dx + dy * dy));
+			this.xinc = dx / n;
+			this.yinc = dy / n;
+			x = x1;
+			y = y1;
+			u = (int) Math.round(x - 0.5);	
+			v = (int) Math.round(y - 0.5);
+			u_prev = Integer.MIN_VALUE;
+			v_prev = Integer.MIN_VALUE;
+			i = 0;
+		}
+
+		@Override
+		public boolean hasNext() {
+			return i <= n;	// needs to be '<=' to include last segment (point)!
+		}
+
+		@Override
+		public Point next() {
+			if (i > n) throw new NoSuchElementException();
+			Point p = new Point(u, v);	// the current (next) point
+			moveToNext();
+			return p;
+		}
+		
+		// move to next point by skipping duplicate points
+		private void moveToNext() {
+			do {
+				i = i + 1;
+				x = x1 + i * xinc;
+				y = y1 + i * yinc; 
+				u_prev = u;
+				v_prev = v;
+				u = (int) Math.round(x - 0.5);	
+				v = (int) Math.round(y - 0.5);
+			} while (i <= n && u == u_prev && v == v_prev);
+		}
+		
+		@Override
+		public void remove() {
+			throw new UnsupportedOperationException();
+		}
+	}
+	
+	@Override
+	public Iterator<Point> iterator() {
+		if (getStrokeWidth() <= 1.0)
+			return new PointIterator(this);	// use the specific thin-line iterator
+		else
+			return super.iterator();	// fall back on Roi's iterator
 	}
 
 }

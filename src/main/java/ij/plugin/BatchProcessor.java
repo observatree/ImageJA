@@ -3,7 +3,7 @@ import ij.*;
 import ij.process.*;
 import ij.gui.*;
 import ij.util.Tools;
-import ij.io.OpenDialog;
+import ij.io.*;
 import ij.macro.Interpreter;
 import java.awt.*;
 import java.awt.event.*;
@@ -11,10 +11,11 @@ import java.io.*;
 import java.util.Vector;
 
 /** This plugin implements the File/Batch/Macro and File/Batch/Virtual Stack commands. */
-	public class BatchProcesser implements PlugIn, ActionListener, ItemListener, Runnable {
+	public class BatchProcessor implements PlugIn, ActionListener, ItemListener, Runnable {
 		private static final String MACRO_FILE_NAME = "BatchMacro.ijm";
 		private static final String[] formats = {"TIFF", "8-bit TIFF", "JPEG", "GIF", "PNG", "PGM", "BMP", "FITS", "Text Image", "ZIP", "Raw"};
 		private static String format = Prefs.get("batch.format", formats[0]);
+		
 		private static final String[] code = {
 			"[Select from list]",
 			"Add Border",
@@ -32,6 +33,22 @@ import java.util.Vector;
 			"Show File Info",
 			"Unsharp Mask",
 		};
+		
+		private static final String help = "<html>"
+		+"<h1>Process&gt;Batch&gt;Virtual Stack</h1>"
+		+"<font size=+1>"
+		+"This command runs macro code on each image in a virtual stack.<br>"
+		+"The processed images are saved in the <i>Output</i> folder,<br>"
+		+"in the specified <i>Format</i>, allowing them to be opened as a<br>"
+		+"virtual stack. Make sure the <i>Output</i> folder is empty<br>"
+		+"before clicking on <i>Process</i>.<br>"
+		+"<br>"
+		+"In the macro code, the 'i' (slice index) and 'n' (stack size) variables<br>"
+		+"are predefined. Call <i>setOption('SaveBatchOutput',false)</i> to<br>"
+		+"prevent the image currently being processed from being saved,<br>"
+		+"effectively removing it from the output virtual stack.<br> <br>"
+		+"</font>";
+
 		private String macro = "";
 		private int testImage;
 		private Button input, output, open, save, test;
@@ -40,6 +57,9 @@ import java.util.Vector;
 		private Thread thread;
 		private ImagePlus virtualStack;
 		private ImagePlus outputImage;
+		private boolean errorDisplayed;
+		private String filter;
+		private static boolean saveOutput = true;
 
 	public void run(String arg) {
 		if (arg.equals("stack")) {
@@ -103,9 +123,11 @@ import java.util.Vector;
 		gd = new NonBlockingGenericDialog("Batch Process");
 		addPanels(gd);
 		gd.setInsets(15, 0, 5);
-		gd.addChoice("Output Format:", formats, format);
+		gd.addChoice("Output_format:", formats, format);
 		gd.setInsets(0, 0, 5);
-		gd.addChoice("Add Macro Code:", code, code[0]);
+		gd.addChoice("Add macro code:", code, code[0]);
+		if (virtualStack==null)
+			gd.addStringField("File name contains:", "", 10);
 		gd.setInsets(15, 10, 0);
 		Dimension screen = IJ.getScreenSize();
 		gd.addTextAreas(macro, null, screen.width<=600?10:15, 60);
@@ -113,9 +135,13 @@ import java.util.Vector;
 		gd.setOKLabel("Process");
 		Vector choices = gd.getChoices();
 		Choice choice = (Choice)choices.elementAt(1);
+		if (virtualStack!=null)
+			gd.addHelp(help);
 		choice.addItemListener(this);
 		gd.showDialog();
 		format = gd.getNextChoice();
+		if (virtualStack==null)
+			filter = gd.getNextString();
 		macro = gd.getNextText();
 		return !gd.wasCanceled();
 	}
@@ -129,12 +155,12 @@ import java.util.Vector;
 			IJ.showProgress(i, n);
 			ImageProcessor ip = stack.getProcessor(i);
 			if (ip==null) return;
-			ImagePlus imp = new ImagePlus("", ip);
+			ImagePlus imp = new ImagePlus(i+"/"+stack.getSize(), ip);
 			if (!macro.equals("")) {
-				if (!runMacro("i="+(index++)+";"+macro, imp))
+				if (!runMacro("i="+(index++)+";"+"n="+stack.getSize()+";"+macro, imp))
 					break;
 			}
-			if (!outputPath.equals("")) {
+			if (saveOutput && !outputPath.equals("")) {
 				if (format.equals("8-bit TIFF") || format.equals("GIF")) {
 					if (imp.getBitDepth()==24)
 						IJ.run(imp, "8-bit Color", "number=256");
@@ -143,6 +169,7 @@ import java.util.Vector;
 				}
 				IJ.saveAs(imp, format, outputPath+pad(i));
 			}
+			saveOutput = true;
 			imp.close();
 		}
 		if (outputPath!=null && !outputPath.equals(""))
@@ -159,24 +186,37 @@ import java.util.Vector;
 	
 	void processFolder(String inputPath, String outputPath) {
 		String[] list = (new File(inputPath)).list();
+		list = FolderOpener.getFilteredList(list, filter, "Batch Processor");
+		if (list==null)
+			return;
 		int index = 0;
+		int startingCount = WindowManager.getImageCount();
 		for (int i=0; i<list.length; i++) {
 			if (IJ.escapePressed()) break;
 			String path = inputPath + list[i];
 			if (IJ.debugMode) IJ.log(i+": "+path);
 			if ((new File(path)).isDirectory())
 				continue;
-			if (list[i].startsWith(".")||list[i].endsWith(".avi")||list[i].endsWith(".AVI"))
+			if (list[i].startsWith(".")||list[i].endsWith(".avi")||list[i].endsWith(".AVI") || list[i].equals("Thumbs.db"))
 				continue;
 			IJ.showProgress(i+1, list.length);
+			IJ.redirectErrorMessages(true);
 			ImagePlus imp = IJ.openImage(path);
-			if (imp==null) continue;
+			IJ.redirectErrorMessages(false);
+			if (imp==null && WindowManager.getImageCount()>startingCount)
+				imp = WindowManager.getCurrentImage();
+			if (imp==null)
+				imp = Opener.openUsingBioFormats(path);
+			if (imp==null) {
+				IJ.log("openImage() and openUsingBioFormats() returned null: "+path);
+				continue;
+			}
 			if (!macro.equals("")) {
 				outputImage = null;
 				if (!runMacro("i="+(index++)+";"+macro, imp))
 					break;
 			}
-			if (!outputPath.equals("")) {
+			if (saveOutput && !outputPath.equals("")) {
 				if (format.equals("8-bit TIFF") || format.equals("GIF")) {
 					if (imp.getBitDepth()==24)
 						IJ.run(imp, "8-bit Color", "number=256");
@@ -188,6 +228,7 @@ import java.util.Vector;
 				else
 					IJ.saveAs(imp, format, outputPath+list[i]);
 			}
+			saveOutput = true;
 			imp.close();
 		}
 	}
@@ -203,6 +244,8 @@ import java.util.Vector;
 			if (!(e instanceof RuntimeException && msg!=null && e.getMessage().equals(Macro.MACRO_CANCELED)))
 				IJ.handleException(e);
 			return false;
+		} finally {
+			WindowManager.setTempCurrentImage(null);
 		}
 		return true;
 	}
@@ -300,7 +343,7 @@ import java.util.Vector;
 		}
 	}
 
-	String openMacroFromJar(String name) {
+	public static String openMacroFromJar(String name) {
 		ImageJ ij = IJ.getInstance();
 		Class c = ij!=null?ij.getClass():(new ImageStack()).getClass();
 		String macro = null;
@@ -327,14 +370,10 @@ import java.util.Vector;
 			String path = IJ.getDirectory("Input Folder");
 			if (path==null) return;
 			inputDir.setText(path);
-			if (IJ.isMacOSX())
-				{gd.setVisible(false); gd.setVisible(true);}
 		} else if (source==output) {
 			String path = IJ.getDirectory("Output Folder");
 			if (path==null) return;
 			outputDir.setText(path);
-			if (IJ.isMacOSX())
-				{gd.setVisible(false); gd.setVisible(true);}
 		} else if (source==test) {
 			thread = new Thread(this, "BatchTest"); 
 			thread.setPriority(Math.max(thread.getPriority()-2, Thread.MIN_PRIORITY));
@@ -365,7 +404,7 @@ import java.util.Vector;
 	}
 
 	void error(String msg) {
-		IJ.error("Batch Processer", msg);
+		IJ.error("Batch Processor", msg);
 	}
 	
 	public void run() {
@@ -377,11 +416,17 @@ import java.util.Vector;
 			return;
 		}
 		ImagePlus imp = null;
+		IJ.redirectErrorMessages(true);
 		if (virtualStack!=null)
 			imp = getVirtualStackImage();
 		else
 			imp = getFolderImage();
-		if (imp==null) return;
+		IJ.redirectErrorMessages(false);
+		if (imp==null) {
+			if (!errorDisplayed)
+				IJ.log("IJ.openImage() returned null");
+			return;
+		}
 		runMacro("i=0;"+macro, imp);
 		Point loc = new Point(10, 30);
 		if (testImage!=0) {
@@ -411,6 +456,7 @@ import java.util.Vector;
 		File f1 = new File(inputPath);
 		if (!f1.exists() || !f1.isDirectory()) {
 			error("Input does not exist or is not a folder\n \n"+inputPath);
+			errorDisplayed = true;
 			return null;
 		}
 		String[] list = (new File(inputPath)).list();
@@ -426,6 +472,9 @@ import java.util.Vector;
 		OpenDialog.setLastDirectory(f.getParent()+File.separator);
 		OpenDialog.setLastName(f.getName());
 	}
-
+	
+	public static void saveOutput(boolean b) {
+		saveOutput = b;
+	}
 
 }

@@ -17,9 +17,10 @@ public class PNG_Writer implements PlugIn {
 
     public void run(String path) {
         imp = WindowManager.getCurrentImage();
-        if (imp==null)
-        	{IJ.noImage(); return;}
-
+        if (imp==null) {
+        	IJ.noImage();
+        	return;
+        }
         if (path.equals("")) {
             SaveDialog sd = new SaveDialog("Save as PNG...", imp.getTitle(), ".png");
             String name = sd.getFileName();
@@ -28,7 +29,6 @@ public class PNG_Writer implements PlugIn {
             String dir = sd.getDirectory();
             path = dir + name;
         }
-
         try {
             writeImage(imp, path, Prefs.getTransparentIndex());
         } catch (Exception e) {
@@ -41,7 +41,9 @@ public class PNG_Writer implements PlugIn {
     }
 
 	public void writeImage(ImagePlus imp, String path, int transparentIndex) throws Exception {
-		if (transparentIndex>=0 && transparentIndex<=255 && imp.getBitDepth()==8)
+		if (imp.getStackSize()==4 && imp.getBitDepth()==8 && "alpha".equalsIgnoreCase(imp.getStack().getSliceLabel(4)))
+			writeFourChannelsWithAlpha(imp, path);
+		else if (transparentIndex>=0 && transparentIndex<=255 && imp.getBitDepth()==8)
 			writeImageWithTransparency(imp, path, transparentIndex);
 		else if (imp.getOverlay()!=null && !imp.getHideOverlay())
 			ImageIO.write(imp.flatten().getBufferedImage(), "png", new File(path));
@@ -49,6 +51,19 @@ public class PNG_Writer implements PlugIn {
 			write16gs(imp, path);
         else
 			ImageIO.write(imp.getBufferedImage(), "png", new File(path));
+	}
+	
+	private void writeFourChannelsWithAlpha(ImagePlus imp, String path) throws Exception {
+		ImageStack stack = imp.getStack();
+		int w=imp.getWidth(), h=imp.getHeight();
+		ImagePlus imp2 = new ImagePlus("", new ColorProcessor(w,h));
+		ColorProcessor cp = (ColorProcessor)imp2.getProcessor();
+		for (int channel=1; channel<=4; channel++)
+			cp.setChannel(channel, (ByteProcessor)stack.getProcessor(channel));
+		BufferedImage bi = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+		WritableRaster raster = bi.getRaster();
+		raster.setDataElements(0, 0, w, h, cp.getPixels());
+		ImageIO.write(bi, "png", new File(path));
 	}
     
 	void writeImageWithTransparency(ImagePlus imp, String path, int transparentIndex) throws Exception {
@@ -73,13 +88,8 @@ public class PNG_Writer implements PlugIn {
 	}
 
     void write16gs(ImagePlus imp, String path) throws Exception {
-        //IJ.showMessage("PNG Writer", "Writing " + imp.getBitDepth() + "bits\n \n");
-		int width = imp.getWidth();
-		int  height = imp.getHeight();
-		BufferedImage bi = new BufferedImage(
-                width, height, BufferedImage.TYPE_USHORT_GRAY);
-		Graphics2D g = (Graphics2D)bi.getGraphics();
-		g.drawImage(imp.getImage(), 0, 0, null);
+		ShortProcessor sp = (ShortProcessor)imp.getProcessor();
+		BufferedImage bi = sp.get16BitBufferedImage();
 		File f = new File(path);
 		ImageIO.write(bi, "png", f);
     }

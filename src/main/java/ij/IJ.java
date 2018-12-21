@@ -7,7 +7,9 @@ import ij.plugin.*;
 import ij.plugin.filter.*;
 import ij.util.Tools;
 import ij.plugin.frame.Recorder;
+import ij.plugin.frame.ThresholdAdjuster;
 import ij.macro.Interpreter;
+import ij.macro.MacroRunner;
 import ij.measure.Calibration;
 import ij.measure.ResultsTable;
 import ij.measure.Measurements;
@@ -19,15 +21,23 @@ import java.applet.Applet;
 import java.io.*;
 import java.lang.reflect.*;
 import java.net.*;
+import javax.net.ssl.*;
+import java.security.cert.*;
+import java.security.KeyStore;
 
 
 /** This class consists of static utility methods. */
 public class IJ {
 
+	/** Image display modes */
+	public static final int COMPOSITE=1, COLOR=2, GRAYSCALE=3;
+	
 	public static final String URL = "http://imagej.nih.gov/ij";
 	public static final int ALL_KEYS = -1;
 	
+	/** Use setDebugMode(boolean) to enable/disable debug mode. */
 	public static boolean debugMode;
+	
 	public static boolean hideProcessStackDialog;
 	    
     public static final char micronSymbol = '\u00B5';
@@ -39,7 +49,8 @@ public class IJ {
 	private static ProgressBar progressBar;
 	private static TextPanel textPanel;
 	private static String osname, osarch;
-	private static boolean isMac, isWin, isJava2, isJava14, isJava15, isJava16, isJava17, isLinux, is64Bit;
+	private static boolean isMac, isWin, isLinux, is64Bit;
+	private static int javaVersion;
 	private static boolean controlDown, altDown, spaceDown, shiftDown;
 	private static boolean macroRunning;
 	private static Thread previousThread;
@@ -49,25 +60,51 @@ public class IJ {
 	private static boolean memMessageDisplayed;
 	private static long maxMemory;
 	private static boolean escapePressed;
-	private static boolean redirectErrorMessages, redirectErrorMessages2;
+	private static boolean redirectErrorMessages;
 	private static boolean suppressPluginNotFoundError;
 	private static Hashtable commandTable;
 	private static Vector eventListeners = new Vector();
 	private static String lastErrorMessage;
+	private static Properties properties;	private static DecimalFormat[] df;
+	private static DecimalFormat[] sf;
+	private static DecimalFormatSymbols dfs;
+	private static boolean trustManagerCreated;
+	private static String smoothMacro;
 			
 	static {
 		osname = System.getProperty("os.name");
 		isWin = osname.startsWith("Windows");
 		isMac = !isWin && osname.startsWith("Mac");
 		isLinux = osname.startsWith("Linux");
-		String version = System.getProperty("java.version").substring(0,3);
-		if (version.compareTo("2.9")<=0) {  // JVM on Sharp Zaurus PDA claims to be "3.1"!
-			isJava2 = version.compareTo("1.1")>0;
-			isJava14 = version.compareTo("1.3")>0;
-			isJava15 = version.compareTo("1.4")>0;
-			isJava16 = version.compareTo("1.5")>0;
-			isJava17 = version.compareTo("1.6")>0;
-		}
+		String version = System.getProperty("java.version");
+		if (version.startsWith("1.8"))
+			javaVersion = 8;
+		else if (version.startsWith("1.6"))
+			javaVersion = 6;
+		else if (version.startsWith("1.9")||version.startsWith("9"))
+			javaVersion = 9;
+		else if (version.startsWith("10"))
+			javaVersion = 10;
+		else if (version.startsWith("11"))
+			javaVersion = 11;
+		else if (version.startsWith("12"))
+			javaVersion = 12;
+		else if (version.startsWith("1.7"))
+			javaVersion = 7;
+		else
+			javaVersion = 6;
+		dfs = new DecimalFormatSymbols(Locale.US);
+		df = new DecimalFormat[10];
+		df[0] = new DecimalFormat("0", dfs);
+		df[1] = new DecimalFormat("0.0", dfs);
+		df[2] = new DecimalFormat("0.00", dfs);
+		df[3] = new DecimalFormat("0.000", dfs);
+		df[4] = new DecimalFormat("0.0000", dfs);
+		df[5] = new DecimalFormat("0.00000", dfs);
+		df[6] = new DecimalFormat("0.000000", dfs);
+		df[7] = new DecimalFormat("0.0000000", dfs);
+		df[8] = new DecimalFormat("0.00000000", dfs);
+		df[9] = new DecimalFormat("0.000000000", dfs);
 	}
 			
 	static void init(ImageJ imagej, Applet theApplet) {
@@ -85,6 +122,12 @@ public class IJ {
 		return ij;
 	}
 	
+	/**Enable/disable debug mode.*/
+	public static void setDebugMode(boolean b) {
+		debugMode = b;
+		LogStream.redirectSystem(debugMode);
+	}
+
 	/** Runs the macro contained in the string <code>macro</code>.
 		Returns any string value returned by the macro, null if the macro
 		does not return a value, or "[aborted]" if the macro was aborted
@@ -106,15 +149,12 @@ public class IJ {
 
 	/** Runs the specified macro or script file in the current thread.
 		The file is assumed to be in the macros folder
- 		unless <code>name</code> is a full path. ".txt"  is
-    	added if <code>name</code> does not have an extension.
+ 		unless <code>name</code> is a full path.
 		The optional string argument (<code>arg</code>) can be retrieved in the called 
 		macro or script (v1.42k or later) using the getArgument() function. 
 		Returns any string value returned by the macro, or null. Scripts always return null.
 		The equivalent macro function is runMacro(). */
 	public static String runMacroFile(String name, String arg) {
-		if (ij==null && Menus.getCommands()==null)
-			init();
 		Macro_Runner mr = new Macro_Runner();
 		return mr.runMacroFile(name, arg);
 	}
@@ -143,9 +183,9 @@ public class IJ {
 	
 	/** Runs the specified plugin and returns a reference to it. */
 	public static Object runPlugIn(String commandName, String className, String arg) {
-		if (IJ.debugMode)
-			IJ.log("runPlugin: "+className+" "+arg);
 		if (arg==null) arg = "";
+		if (IJ.debugMode)
+			IJ.log("runPlugIn: "+className+argument(arg));
 		// Load using custom classloader if this is a user 
 		// plugin and we are not running as an applet
 		if (!className.startsWith("ij.") && applet==null)
@@ -170,13 +210,16 @@ public class IJ {
 	}
         
 	static Object runUserPlugIn(String commandName, String className, String arg, boolean createNewLoader) {
+		if (IJ.debugMode)
+			IJ.log("runUserPlugIn: "+className+", arg="+argument(arg));
 		if (applet!=null) return null;
 		if (checkForDuplicatePlugins) {
 			// check for duplicate classes and jars in the plugins folder
 			IJ.runPlugIn("ij.plugin.ClassChecker", "");
 			checkForDuplicatePlugins = false;
 		}
-		if (createNewLoader) classLoader = null;
+		if (createNewLoader)
+			classLoader = null;
 		ClassLoader loader = getClassLoader();
 		Object thePlugIn = null;
 		try { 
@@ -187,23 +230,30 @@ public class IJ {
 				new PlugInFilterRunner(thePlugIn, commandName, arg);
 		}
 		catch (ClassNotFoundException e) {
-			if (className.indexOf('_')!=-1 && !suppressPluginNotFoundError)
+			if (className.contains("_")  && !suppressPluginNotFoundError)
 				error("Plugin or class not found: \"" + className + "\"\n(" + e+")");
 		}
 		catch (NoClassDefFoundError e) {
 			int dotIndex = className.indexOf('.');
-			if (dotIndex >= 0)
-				return runUserPlugIn(commandName, className.substring(dotIndex + 1), arg, createNewLoader);
-			if (className.indexOf('_')!=-1 && !suppressPluginNotFoundError)
-				error("Plugin or class not found: \"" + className + "\"\n(" + e+")");
+			if (dotIndex>=0 && className.contains("_")) {
+				// rerun plugin after removing folder name
+				if (debugMode) IJ.log("runUserPlugIn: rerunning "+className);
+				return runUserPlugIn(commandName, className.substring(dotIndex+1), arg, createNewLoader);
+			}
+			if (className.contains("_") && !suppressPluginNotFoundError)
+				error("Run User Plugin", "Class not found while attempting to run \"" + className + "\"\n \n   " + e);
 		}
 		catch (InstantiationException e) {error("Unable to load plugin (ins)");}
 		catch (IllegalAccessException e) {error("Unable to load plugin, possibly \nbecause it is not public.");}
-		if (redirectErrorMessages && !"HandleExtraFileTypes".equals(className))
+		if (thePlugIn!=null && !"HandleExtraFileTypes".equals(className))
  			redirectErrorMessages = false;
 		suppressPluginNotFoundError = false;
 		return thePlugIn;
 	} 
+	
+	private static String argument(String arg) {
+		return arg!=null && !arg.equals("") && !arg.contains("\n")?"(\""+arg+"\")":"";
+	}
 
 	static void wrongType(int capabilities, String cmd) {
 		String s = "\""+cmd+"\" requires an image of type:\n \n";
@@ -215,10 +265,14 @@ public class IJ {
 		error(s);
 	}
 	
-    /** Starts executing a menu command in a separete thread and returns immediately. */
+    /** Runs a menu command on a separete thread and returns immediately. */
 	public static void doCommand(String command) {
-		if (ij!=null)
-			ij.doCommand(command);
+		new Executer(command, null);
+	}
+	
+    /** Runs a menu command on a separete thread, using the specified image. */
+	public static void doCommand(ImagePlus imp, String command) {
+		new Executer(command, imp);
 	}
 	
     /** Runs an ImageJ command. Does not return until 
@@ -231,9 +285,12 @@ public class IJ {
 	
     /** Runs an ImageJ command, with options that are passed to the
 		GenericDialog and OpenDialog classes. Does not return until
-		the command has finished executing. */
+		the command has finished executing. To generate run() calls,
+		start the recorder (Plugins/Macro/Record) and run commands
+		from the ImageJ menu bar.
+	*/
 	public static void run(String command, String options) {
-		//IJ.log("run1: "+command+" "+Thread.currentThread().hashCode());
+		//IJ.log("run1: "+command+" "+Thread.currentThread().hashCode()+" "+options);
 		if (ij==null && Menus.getCommands()==null)
 			init();
 		Macro.abort = false;
@@ -286,6 +343,7 @@ public class IJ {
 			commandTable.put("XY Coodinates... ", "XY Coordinates... ");
 			commandTable.put("Statistics...", "Statistics");
 			commandTable.put("Channels Tool... ", "Channels Tool...");
+			commandTable.put("Profile Plot Options...", "Plots...");
 		}
 		String command2 = (String)commandTable.get(command);
 		if (command2!=null)
@@ -294,8 +352,12 @@ public class IJ {
 			return command;
 	}
 
-	/** Runs an ImageJ command using the specified image and options. */
+	/** Runs an ImageJ command using the specified image and options.
+		To generate run() calls, start the recorder (Plugins/Macro/Record)
+		and run commands from the ImageJ menu bar.*/
 	public static void run(ImagePlus imp, String command, String options) {
+		if (ij==null && Menus.getCommands()==null)
+			init();
 		if (imp!=null) {
 			ImagePlus temp = WindowManager.getTempCurrentImage();
 			WindowManager.setTempCurrentImage(imp);
@@ -334,7 +396,8 @@ public class IJ {
 	
 	/**Displays a message in the ImageJ status bar.*/
 	public static void showStatus(String s) {
-		if (ij!=null) ij.showStatus(s);
+		if (ij!=null)
+			ij.showStatus(s);
 		ImagePlus imp = WindowManager.getCurrentImage();
 		ImageCanvas ic = imp!=null?imp.getCanvas():null;
 		if (ic!=null)
@@ -372,10 +435,21 @@ public class IJ {
 		if (logPanel!=null) {
 			if (s.startsWith("\\"))
 				handleLogCommand(s);
-			else
+			else {
+				if (s.endsWith("\n")) {
+					if (s.equals("\n\n"))
+						s= "\n \n ";
+					else if (s.endsWith("\n\n"))
+						s = s.substring(0, s.length()-2)+"\n \n ";
+					else
+						s = s+" ";
+				}
 				logPanel.append(s);
-		} else
+			}
+		} else {
+			LogStream.redirectSystem(false);
 			System.out.println(s);
+		}
 	}
 
 	static void handleLogCommand(String s) {
@@ -405,6 +479,8 @@ public class IJ {
 			logPanel.setLine(line, s2);
 		} else if (s.equals("\\Clear")) {
 			logPanel.clear();
+		} else if (s.startsWith("\\Heading:")) {
+			logPanel.updateColumnHeadings(s.substring(10));
 		} else if (s.equals("\\Close")) {
 			Frame f = WindowManager.getFrame("Log");
 			if (f!=null && (f instanceof TextWindow))
@@ -443,7 +519,7 @@ public class IJ {
 		Frame frame = WindowManager.getFrontWindow();
 		if (frame!=null && (frame instanceof TextWindow)) {
 			TextWindow tw = (TextWindow)frame;
-			if (tw.getTextPanel().getResultsTable()==null) {
+			if (tw.getResultsTable()==null) {
 				IJ.error("Rename", "\""+tw.getTitle()+"\" is not a results table");
 				return;
 			}
@@ -455,7 +531,7 @@ public class IJ {
 		}
 	}
 
-	/** Changes the name of a results window from 'oldTitle' to 'newTitle'. */
+	/** Changes the name of a table window from 'oldTitle' to 'newTitle'. */
 	public static void renameResults(String oldTitle, String newTitle) {
 		Frame frame = WindowManager.getFrame(oldTitle);
 		if (frame==null) {
@@ -463,22 +539,20 @@ public class IJ {
 			return;
 		} else if (frame instanceof TextWindow) {
 			TextWindow tw = (TextWindow)frame;
-			if (tw.getTextPanel().getResultsTable()==null) {
-				error("Rename", "\""+oldTitle+"\" is not a results table");
+			if (tw.getResultsTable()==null) {
+				error("Rename", "\""+oldTitle+"\" is not a table");
 				return;
 			}
 			tw.rename(newTitle);
 		} else
-			error("Rename", "\""+oldTitle+"\" is not a results table");
+			error("Rename", "\""+oldTitle+"\" is not a table");
 	}
 
-	/** Deletes 'row1' through 'row2' of the "Results" window. Arguments
-	     must be in the range 0-Analyzer.getCounter()-1. */
+	/** Deletes 'row1' through 'row2' of the "Results" window, where
+		'row1' and 'row2' must be in the range 0-Analyzer.getCounter()-1. */
 	public static void deleteRows(int row1, int row2) {
-		int n = row2 - row1 + 1;
 		ResultsTable rt = Analyzer.getResultsTable();
-		for (int i=row1; i<row1+n; i++)
-			rt.deleteRow(row1);
+		rt.deleteRows(row1, row2);
 		rt.show("Results");
 	}
 
@@ -506,16 +580,14 @@ public class IJ {
 		Undo.reset();
 		System.gc();
 		lastErrorMessage = "out of memory";
-		String tot = Runtime.getRuntime().totalMemory()/1048576L+"MB";
+		String tot = Runtime.getRuntime().maxMemory()/1048576L+"MB";
 		if (!memMessageDisplayed)
 			log(">>>>>>>>>>>>>>>>>>>>>>>>>>>");
 		log("<Out of memory>");
 		if (!memMessageDisplayed) {
 			log("<All available memory ("+tot+") has been>");
-			log("<used. Instructions for making more>");
-			log("<available can be found in the \"Memory\" >");
-			log("<sections of the installation notes at>");
-			log("<"+IJ.URL+"/docs/install/>");
+			log("<used. To make more available, use the>");
+			log("<Edit>Options>Memory & Threads command.>");
 			log(">>>>>>>>>>>>>>>>>>>>>>>>>>>");
 			memMessageDisplayed = true;
 		}
@@ -556,7 +628,7 @@ public class IJ {
 		Writes to the Java console if ImageJ is not present. */
 	public static void showMessage(String title, String msg) {
 		if (ij!=null) {
-			if (msg!=null && msg.startsWith("<html>")) {
+			if (msg!=null && (msg.startsWith("<html>")||msg.startsWith("<HTML>"))) {
 				HTMLDialog hd = new HTMLDialog(title, msg);
 				if (isMacro() && hd.escapePressed())
 					throw new RuntimeException(Macro.MACRO_CANCELED);
@@ -570,8 +642,8 @@ public class IJ {
 	}
 
 	/** Displays a message in a dialog box titled "ImageJ". If a 
-		macro is running, it is aborted. Writes to the Java console
-		if the ImageJ window is not present.*/
+		macro or JavaScript is running, it is aborted. Writes to the
+		Java console if the ImageJ window is not present.*/
 	public static void error(String msg) {
 		error(null, msg);
 		if (Thread.currentThread().getName().endsWith("JavaScript"))
@@ -580,21 +652,31 @@ public class IJ {
 			Macro.abort();
 	}
 	
-	/**Displays a message in a dialog box with the specified title.
-		If a macro is running, it is aborted. Writes to the Java  
-		console if ImageJ is not present. */
+	/** Displays a message in a dialog box with the specified title. If a 
+		macro or JavaScript is running, it is aborted. Writes to the
+		Java console if the ImageJ window is not present. */
 	public static void error(String title, String msg) {
+		if (msg!=null && msg.endsWith(Macro.MACRO_CANCELED))
+			return;
 		String title2 = title!=null?title:"ImageJ";
 		boolean abortMacro = title!=null;
 		lastErrorMessage = msg;
-		if (redirectErrorMessages || redirectErrorMessages2) {
+		if (redirectErrorMessages) {
 			IJ.log(title2 + ": " + msg);
-			if (abortMacro && (title.equals("Opener")||title.equals("Open URL")||title.equals("DicomDecoder")))
+			if (abortMacro && (title.contains("Open")||title.contains("Reader")))
 				abortMacro = false;
 		} else
 			showMessage(title2, msg);
 		redirectErrorMessages = false;
-		if (abortMacro) Macro.abort();
+		if (abortMacro)
+			Macro.abort();
+	}
+
+	/** Aborts any currently running JavaScript, or use IJ.error(string)
+		to abort a JavaScript with a message. */
+	public static void exit() {
+		if (Thread.currentThread().getName().endsWith("JavaScript"))
+			throw new RuntimeException(Macro.MACRO_CANCELED);
 	}
 
 	/** 
@@ -726,10 +808,6 @@ public class IJ {
 		return d2s(n, 2);
 	}
 	
-	private static DecimalFormat[] df;
-	private static DecimalFormat[] sf;
-	private static DecimalFormatSymbols dfs;
-
 	/** Converts a number to a rounded formatted string.
 		The 'decimalPlaces' argument specifies the number of
 		digits to the right of the decimal point (0-9). Uses
@@ -741,24 +819,12 @@ public class IJ {
 			return "3.4e38";
 		double np = n;
 		if (n<0.0) np = -n;
-		if (df==null) {
-			dfs = new DecimalFormatSymbols(Locale.US);
-			df = new DecimalFormat[10];
-			df[0] = new DecimalFormat("0", dfs);
-			df[1] = new DecimalFormat("0.0", dfs);
-			df[2] = new DecimalFormat("0.00", dfs);
-			df[3] = new DecimalFormat("0.000", dfs);
-			df[4] = new DecimalFormat("0.0000", dfs);
-			df[5] = new DecimalFormat("0.00000", dfs);
-			df[6] = new DecimalFormat("0.000000", dfs);
-			df[7] = new DecimalFormat("0.0000000", dfs);
-			df[8] = new DecimalFormat("0.00000000", dfs);
-			df[9] = new DecimalFormat("0.000000000", dfs);
-		}
-		if (decimalPlaces<0) {
+		if (decimalPlaces<0) synchronized(IJ.class) {
 			decimalPlaces = -decimalPlaces;
 			if (decimalPlaces>9) decimalPlaces=9;
 			if (sf==null) {
+				if (dfs==null)
+					dfs = new DecimalFormatSymbols(Locale.US);
 				sf = new DecimalFormat[10];
 				sf[1] = new DecimalFormat("0.0E0",dfs);
 				sf[2] = new DecimalFormat("0.00E0",dfs);
@@ -844,9 +910,11 @@ public class IJ {
 				break;
 			case KeyEvent.VK_ALT:
 				altDown=true;
+				updateStatus();
 				break;
 			case KeyEvent.VK_SHIFT:
 				shiftDown=true;
+				updateStatus();
 				if (debugMode) beep();
 				break;
 			case KeyEvent.VK_SPACE: {
@@ -867,8 +935,8 @@ public class IJ {
 		switch (key) {
 			case KeyEvent.VK_CONTROL: controlDown=false; break;
 			case KeyEvent.VK_META: if (isMacintosh()) controlDown=false; break;
-			case KeyEvent.VK_ALT: altDown=false; break;
-			case KeyEvent.VK_SHIFT: shiftDown=false; if (debugMode) beep(); break;
+			case KeyEvent.VK_ALT: altDown=false; updateStatus(); break;
+			case KeyEvent.VK_SHIFT: shiftDown=false; updateStatus();  if (debugMode) beep(); break;
 			case KeyEvent.VK_SPACE:
 				spaceDown=false;
 				ImageWindow win = WindowManager.getCurrentWindow();
@@ -877,6 +945,17 @@ public class IJ {
 			case ALL_KEYS:
 				shiftDown=controlDown=altDown=spaceDown=false;
 				break;
+		}
+	}
+	
+	private static void updateStatus() {
+		ImagePlus imp = WindowManager.getCurrentImage();
+		if (imp!=null) {
+			ImageCanvas ic = imp.getCanvas();
+			if (ic!=null && imp.getCalibration().scaled()) {
+				Point p = ic.getCursorLoc();
+				imp.mouseMoved(p.x, p.y);
+			}
 		}
 	}
 	
@@ -900,29 +979,44 @@ public class IJ {
 		return isWin;
 	}
 	
-	/** Always returns true. */
-	public static boolean isJava2() {
-		return isJava2;
+	/** Returns the Java version (6, 7, 8, 9, 10, etc.). */
+	public static int javaVersion() {
+		return javaVersion;
 	}
 	
-	/** Returns true if ImageJ is running on a Java 1.4 or greater JVM. */
+	/** Always returns true. */
+	public static boolean isJava2() {
+		return true;
+	}
+	
+	/** Always returns true. */
 	public static boolean isJava14() {
-		return isJava14;
+		return true;
 	}
 
-	/** Returns true if ImageJ is running on a Java 1.5 or greater JVM. */
+	/** Always returns true. */
 	public static boolean isJava15() {
-		return isJava15;
+		return true;
 	}
 
 	/** Returns true if ImageJ is running on a Java 1.6 or greater JVM. */
 	public static boolean isJava16() {
-		return isJava16;
+		return javaVersion >= 6;
 	}
 
 	/** Returns true if ImageJ is running on a Java 1.7 or greater JVM. */
 	public static boolean isJava17() {
-		return isJava17;
+		return javaVersion >= 7;
+	}
+
+	/** Returns true if ImageJ is running on a Java 1.8 or greater JVM. */
+	public static boolean isJava18() {
+		return javaVersion >= 8;
+	}
+
+	/** Returns true if ImageJ is running on a Java 1.9 or greater JVM. */
+	public static boolean isJava19() {
+		return javaVersion >= 9;
 	}
 
 	/** Returns true if ImageJ is running on Linux. */
@@ -957,18 +1051,20 @@ public class IJ {
 		if the user selects "Cancel".
 	*/
 	public static int setupDialog(ImagePlus imp, int flags) {
-		if (imp==null || (ij!=null&&ij.hotkey))
+		if (imp==null || (ij!=null&&ij.hotkey)) {
+			if (ij!=null) ij.hotkey=false;
 			return flags;
+		}
 		int stackSize = imp.getStackSize();
 		if (stackSize>1) {
 			String macroOptions = Macro.getOptions();
-			if (imp.isComposite() && ((CompositeImage)imp).getMode()==CompositeImage.COMPOSITE) {
+			if (imp.isComposite() && ((CompositeImage)imp).getMode()==IJ.COMPOSITE) {
 				if (macroOptions==null || !macroOptions.contains("slice"))
-					return flags+PlugInFilter.DOES_STACKS;
+					return flags | PlugInFilter.DOES_STACKS;
 			}
 			if (macroOptions!=null) {
 				if (macroOptions.indexOf("stack ")>=0)
-					return flags+PlugInFilter.DOES_STACKS;
+					return flags | PlugInFilter.DOES_STACKS;
 				else
 					return flags;
 			}
@@ -984,15 +1080,15 @@ public class IJ {
 		    		int size = (stackSize*imp.getWidth()*imp.getHeight()*imp.getBytesPerPixel()+524288)/1048576;
 		    		String msg =
 						"Use the Process>Batch>Virtual Stack command\n"+
-						"to process a virtual stack ike this one or convert\n"+
-						"it to a normal stack using Image>Duplicate, which\n"+
+						"to process a virtual stack or convert it into a\n"+
+						"normal stack using Image>Duplicate, which\n"+
 						"will require "+size+"MB of additional memory.";
 		    		error(msg);
 					return PlugInFilter.DONE;
 		    	}
 				if (Recorder.record)
 					Recorder.recordOption("stack");
-				return flags+PlugInFilter.DOES_STACKS;
+				return flags | PlugInFilter.DOES_STACKS;
 			}
 			if (Recorder.record)
 				Recorder.recordOption("slice");
@@ -1014,6 +1110,14 @@ public class IJ {
 		}
 	}
 	
+	/** Creates a subpixel resolution rectangular selection. */
+	public static void makeRectangle(double x, double y, double width, double height) {
+		if (width<=0 || height<0)
+			getImage().deleteRoi();
+		else
+			getImage().setRoi(new Roi(x,y,width,height), !Interpreter.isBatchMode());
+	}
+
 	/** Creates an oval selection. Removes any existing 
 		selection if width or height are less than 1. */
 	public static void makeOval(int x, int y, int width, int height) {
@@ -1025,6 +1129,14 @@ public class IJ {
 		}
 	}
 	
+	/** Creates an subpixel resolution oval selection. */
+	public static void makeOval(double x, double y, double width, double height) {
+		if (width<=0 || height<0)
+			getImage().deleteRoi();
+		else
+			getImage().setRoi(new OvalRoi(x, y, width, height));
+	}
+
 	/** Creates a straight line selection. */
 	public static void makeLine(int x1, int y1, int x2, int y2) {
 		getImage().setRoi(new Line(x1, y1, x2, y2));
@@ -1035,7 +1147,7 @@ public class IJ {
 		getImage().setRoi(new Line(x1, y1, x2, y2));
 	}
 
-	/** Creates a point selection. */
+	/** Creates a point selection using integer coordinates.. */
 	public static void makePoint(int x, int y) {
 		ImagePlus img = getImage();
 		Roi roi = img.getRoi();
@@ -1049,6 +1161,32 @@ public class IJ {
 			IJ.setKeyUp(KeyEvent.VK_ALT);
 		} else
 			img.setRoi(new PointRoi(x, y));
+	}
+	
+	/** Creates a point selection using floating point coordinates. */
+	public static void makePoint(double x, double y) {
+		ImagePlus img = getImage();
+		Roi roi = img.getRoi();
+		if (shiftKeyDown() && roi!=null && roi.getType()==Roi.POINT) {
+			Polygon p = roi.getPolygon();
+			p.addPoint((int)Math.round(x), (int)Math.round(y));
+			img.setRoi(new PointRoi(p.xpoints, p.ypoints, p.npoints));
+			IJ.setKeyUp(KeyEvent.VK_SHIFT);
+		} else if (altKeyDown() && roi!=null && roi.getType()==Roi.POINT) {
+			((PolygonRoi)roi).deleteHandle(x, y);
+			IJ.setKeyUp(KeyEvent.VK_ALT);
+		} else
+			img.setRoi(new PointRoi(x, y));
+	}
+
+	/** Creates an Roi. */
+	public static Roi Roi(double x, double y, double width, double height) {
+		return new Roi(x, y, width, height);
+	}
+
+	/** Creates an OvalRoi. */
+	public static OvalRoi OvalRoi(double x, double y, double width, double height) {
+		return new OvalRoi(x, y, width, height);
 	}
 
 	/** Sets the display range (minimum and maximum displayed pixel values) of the current image. */
@@ -1111,25 +1249,36 @@ public class IJ {
 	}
 
 	/** Sets the lower and upper threshold levels of the specified image and updates the display using
-		the specified <code>displayMode</code> ("Red", "Black & White", "Over/Under" or "No Update"). */
+		the specified <code>displayMode</code> ("Red", "Black & White", "Over/Under" or "No Update").
+		With calibrated images, 'lowerThreshold' and 'upperThreshold' must be density calibrated values.
+		Use setRawThreshold() to set the threshold using raw (uncalibrated) values. */
 	public static void setThreshold(ImagePlus img, double lowerThreshold, double upperThreshold, String displayMode) {
+		Calibration cal = img.getCalibration();
+		if (displayMode==null || !displayMode.contains("raw")) {
+			lowerThreshold = cal.getRawValue(lowerThreshold); 
+			upperThreshold = cal.getRawValue(upperThreshold);
+		}
+		setRawThreshold(img, lowerThreshold, upperThreshold, displayMode);
+	}
+
+	/** This is a version of setThreshold() that always uses raw (uncalibrated) values
+		 in the range 0-255 for 8-bit images and 0-65535 for 16-bit images. */
+	public static void setRawThreshold(ImagePlus img, double lowerThreshold, double upperThreshold, String displayMode) {
 		int mode = ImageProcessor.RED_LUT;
 		if (displayMode!=null) {
 			displayMode = displayMode.toLowerCase(Locale.US);
-			if (displayMode.indexOf("black")!=-1)
+			if (displayMode.contains("black"))
 				mode = ImageProcessor.BLACK_AND_WHITE_LUT;
-			else if (displayMode.indexOf("over")!=-1)
+			else if (displayMode.contains("over"))
 				mode = ImageProcessor.OVER_UNDER_LUT;
-			else if (displayMode.indexOf("no")!=-1)
+			else if (displayMode.contains("no"))
 				mode = ImageProcessor.NO_LUT_UPDATE;
 		}
-		Calibration cal = img.getCalibration();
-		lowerThreshold = cal.getRawValue(lowerThreshold); 
-		upperThreshold = cal.getRawValue(upperThreshold); 
 		img.getProcessor().setThreshold(lowerThreshold, upperThreshold, mode);
-		if (mode != ImageProcessor.NO_LUT_UPDATE) {
+		if (mode!=ImageProcessor.NO_LUT_UPDATE && img.getWindow()!=null) {
 			img.getProcessor().setLutAnimation(true);
 			img.updateAndDraw();
+			ThresholdAdjuster.update();
 		}
 	}
 
@@ -1199,6 +1348,7 @@ public class IJ {
 		ip.resetThreshold();
 		ip.setLutAnimation(true);
 		img.updateAndDraw();
+		ThresholdAdjuster.update();
 	}
 	
 	/** For IDs less than zero, activates the image with the specified ID.
@@ -1215,21 +1365,28 @@ public class IJ {
 			if (impC!=null && impC!=imp && impT!=null)
 				impC.saveRoi();
             WindowManager.setTempCurrentImage(imp);
+            Interpreter.activateImage(imp);
             WindowManager.setWindow(null);
 		} else {
+			if (imp==null)
+				return;
 			ImageWindow win = imp.getWindow();
-			win.toFront();
-			WindowManager.setWindow(win);
+			if (win!=null) {
+				win.toFront();
+				WindowManager.setWindow(win);
+			}
 			long start = System.currentTimeMillis();
-			// timeout after 2 seconds unless current thread is event dispatch thread
+			// timeout after 1 second unless current thread is event dispatch thread
 			String thread = Thread.currentThread().getName();
-			int timeout = thread!=null&&thread.indexOf("EventQueue")!=-1?0:2000;
+			int timeout = thread!=null&&thread.indexOf("EventQueue")!=-1?0:1000;
+			if (IJ.isMacOSX() && IJ.isJava18() && timeout>0)
+				timeout = 250;  //work around OS X/Java 8 window activation bug
 			while (true) {
 				wait(10);
 				imp = WindowManager.getCurrentImage();
 				if (imp!=null && imp.getID()==id)
 					return; // specified image is now active
-				if ((System.currentTimeMillis()-start)>timeout) {
+				if ((System.currentTimeMillis()-start)>timeout && win!=null) {
 					WindowManager.setCurrentWindow(win);
 					return;
 				}
@@ -1337,34 +1494,48 @@ public class IJ {
 	public static int doWand(int x, int y, double tolerance, String mode) {
 		return doWand(getImage(), x, y, tolerance, mode);
 	}
-
+	
 	/** This version of doWand adds an ImagePlus argument. */
 	public static int doWand(ImagePlus img, int x, int y, double tolerance, String mode) {
 		ImageProcessor ip = img.getProcessor();
 		if ((img.getType()==ImagePlus.GRAY32) && Double.isNaN(ip.getPixelValue(x,y)))
 			return 0;
 		int imode = Wand.LEGACY_MODE;
+		boolean smooth = false;
 		if (mode!=null) {
 			if (mode.startsWith("4"))
 				imode = Wand.FOUR_CONNECTED;
 			else if (mode.startsWith("8"))
 				imode = Wand.EIGHT_CONNECTED;
+			smooth = mode.contains("smooth");
+				
 		}
 		Wand w = new Wand(ip);
 		double t1 = ip.getMinThreshold();
-		if (t1==ImageProcessor.NO_THRESHOLD || (ip.getLutUpdateMode()==ImageProcessor.NO_LUT_UPDATE&& tolerance>0.0))
+		if (t1==ImageProcessor.NO_THRESHOLD || (ip.getLutUpdateMode()==ImageProcessor.NO_LUT_UPDATE&& tolerance>0.0)) {
 			w.autoOutline(x, y, tolerance, imode);
-		else
+			smooth = false;
+		} else
 			w.autoOutline(x, y, t1, ip.getMaxThreshold(), imode);
 		if (w.npoints>0) {
 			Roi previousRoi = img.getRoi();
-			int type = Wand.allPoints()?Roi.FREEROI:Roi.TRACED_ROI;
-			Roi roi = new PolygonRoi(w.xpoints, w.ypoints, w.npoints, type);
+			Roi roi = new PolygonRoi(w.xpoints, w.ypoints, w.npoints, Roi.TRACED_ROI);
 			img.deleteRoi();
-			img.setRoi(roi);
-			// add/subtract this ROI to the previous one if the shift/alt key is down
+			img.setRoi(roi);			
 			if (previousRoi!=null)
-				roi.update(shiftKeyDown(), altKeyDown());
+				roi.update(shiftKeyDown(), altKeyDown());  // add/subtract ROI to previous one if shift/alt key down
+			Roi roi2 = img.getRoi();
+			if (smooth && roi2!=null && roi2.getType()==Roi.TRACED_ROI) {
+				Rectangle bounds = roi2.getBounds();
+				if (bounds.width>1 && bounds.height>1) {
+					if (smoothMacro==null)
+						smoothMacro = BatchProcessor.openMacroFromJar("SmoothWandTool.txt");
+					if (EventQueue.isDispatchThread())
+						new MacroRunner(smoothMacro); // run on separate thread
+					else
+						IJ.runMacro(smoothMacro);
+				}
+			}
 		}
 		return w.npoints;
 	}
@@ -1464,7 +1635,7 @@ public class IJ {
 		else if (title2.equals("macros"))
 			return Menus.getMacrosPath();
 		else if (title2.equals("luts")) {
-			String ijdir = getIJDir();
+			String ijdir = Prefs.getImageJDir();
 			if (ijdir!=null)
 				return ijdir + "luts" + File.separator;
 			else
@@ -1472,22 +1643,30 @@ public class IJ {
 		} else if (title2.equals("home"))
 			return System.getProperty("user.home") + File.separator;
 		else if (title2.equals("startup"))
-			return Prefs.getHomeDir() + File.separator;
+			return Prefs.getImageJDir();
 		else if (title2.equals("imagej"))
-			return getIJDir();
+			return Prefs.getImageJDir();
 		else if (title2.equals("current") || title2.equals("default"))
 			return OpenDialog.getDefaultDirectory();
 		else if (title2.equals("temp")) {
 			String dir = System.getProperty("java.io.tmpdir");
 			if (isMacintosh()) dir = "/tmp/";
-			if (dir!=null && !dir.endsWith(File.separator)) dir += File.separator;
+			if (dir!=null && !dir.endsWith(File.separator))
+				dir += File.separator;
 			return dir;
 		} else if (title2.equals("image")) {
 			ImagePlus imp = WindowManager.getCurrentImage();
 	    	FileInfo fi = imp!=null?imp.getOriginalFileInfo():null;
-			if (fi!=null && fi.directory!=null)
-				return fi.directory;
-			else
+			if (fi!=null && fi.directory!=null) {
+				String dir = fi.directory;
+				if (dir!=null && !(dir.endsWith(File.separator)||dir.endsWith("/"))) {
+					if (IJ.isWindows()&&dir.contains(File.separator))
+						dir += File.separator;
+					else
+						dir += "/";
+				}
+				return dir;
+			} else
 				return null;
 		} else {
 			DirectoryChooser dc = new DirectoryChooser(title);
@@ -1496,15 +1675,20 @@ public class IJ {
 			return dir;
 		}
 	}
-	
-	private static String getIJDir() {
-		String path = Menus.getPlugInsPath();
-		if (path==null) return null;
-		String ijdir = (new File(path)).getParent();
-		if (ijdir!=null) ijdir += File.separator;
-		return ijdir;
+		
+	/** Alias for getDirectory(). */
+	public static String getDir(String title) {
+		return getDirectory(title);
 	}
+
 	
+	/** Displays an open file dialog and returns the path to the
+		choosen file, or returns null if the dialog is canceled. */
+	public static String getFilePath(String dialogTitle) {
+		OpenDialog od = new OpenDialog(dialogTitle);
+		return od.getPath();
+	}
+		
 	/** Displays a file open dialog box and then opens the tiff, dicom, 
 		fits, pgm, jpeg, bmp, gif, lut, roi, or text file selected by 
 		the user. Displays an error message if the selected file is not
@@ -1519,7 +1703,8 @@ public class IJ {
 		With 1.41k or later, opens images specified by a URL.
 		*/
 	public static void open(String path) {
-		if (ij==null && Menus.getCommands()==null) init();
+		if (ij==null && Menus.getCommands()==null)
+			init();
 		Opener o = new Opener();
 		macroRunning = true;
 		if (path==null || path.equals(""))		
@@ -1531,24 +1716,35 @@ public class IJ {
 		
 	/** Opens and displays the nth image in the specified tiff stack. */
 	public static void open(String path, int n) {
-		if (ij==null && Menus.getCommands()==null) init();
+		if (ij==null && Menus.getCommands()==null)
+			init();
 		ImagePlus imp = openImage(path, n);
 		if (imp!=null) imp.show();
 	}
 
-	/** Opens the specified file as a tiff, bmp, dicom, fits, pgm, gif 
-		or jpeg image and returns an ImagePlus object if successful.
+	/** Opens the specified file as a tiff, bmp, dicom, fits, pgm, gif, jpeg 
+		or text image and returns an ImagePlus object if successful.
 		Calls HandleExtraFileTypes plugin if the file type is not recognised.
 		Displays a file open dialog if 'path' is null or an empty string.
 		Note that 'path' can also be a URL. Some reader plugins, including
-		the Bio-Formats plugin, display the image and return null. */
+		the Bio-Formats plugin, display the image and return null.
+		Use IJ.open() to display a file open dialog box.
+	*/
 	public static ImagePlus openImage(String path) {
-		return (new Opener()).openImage(path);
+		macroRunning = true;
+		ImagePlus imp = (new Opener()).openImage(path);
+		macroRunning = false;
+		return imp;
 	}
 
 	/** Opens the nth image of the specified tiff stack. */
 	public static ImagePlus openImage(String path, int n) {
 		return (new Opener()).openImage(path, n);
+	}
+
+	/** Opens the specified tiff file as a virtual stack. */
+	public static ImagePlus openVirtual(String path) {
+		return FileInfoVirtualStack.openVirtual(path);
 	}
 
 	/** Opens an image using a file open dialog and returns it as an ImagePlus object. */
@@ -1560,14 +1756,18 @@ public class IJ {
 		Returns "<Error: message>" if there an error, including
 		host or file not found. */
 	public static String openUrlAsString(String url) {
+		//if (!trustManagerCreated && url.contains("nih.gov")) trustAllCerts();
+		url = Opener.updateUrl(url);
+		if (debugMode) log("OpenUrlAsString: "+url);
 		StringBuffer sb = null;
 		url = url.replaceAll(" ", "%20");
 		try {
+			//if (url.contains("nih.gov")) addRootCA();
 			URL u = new URL(url);
 			URLConnection uc = u.openConnection();
 			long len = uc.getContentLength();
-			if (len>1048576L)
-				return "<Error: file is larger than 1MB>";
+			if (len>5242880L)
+				return "<Error: file is larger than 5MB>";
 			InputStream in = u.openStream();
 			BufferedReader br = new BufferedReader(new InputStreamReader(in));
 			sb = new StringBuffer() ;
@@ -1583,6 +1783,49 @@ public class IJ {
 		else
 			return "";
 	}
+	
+	/* 
+	public static void addRootCA() throws Exception {
+		String path = "/Users/wayne/Downloads/Certificates/lets-encrypt-x1-cross-signed.pem";
+		InputStream fis = new BufferedInputStream(new FileInputStream(path));
+		Certificate ca = CertificateFactory.getInstance("X.509").generateCertificate(fis);
+		KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
+		ks.load(null, null);
+		ks.setCertificateEntry(Integer.toString(1), ca);
+		TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+		tmf.init(ks);
+		SSLContext ctx = SSLContext.getInstance("TLS");
+		ctx.init(null, tmf.getTrustManagers(), null); 
+		HttpsURLConnection.setDefaultSSLSocketFactory(ctx.getSocketFactory());
+	}
+	*/
+	
+	/*
+	// Create a new trust manager that trust all certificates
+	// http://stackoverflow.com/questions/10135074/download-file-from-https-server-using-java
+	private static void trustAllCerts() {
+		trustManagerCreated = true;
+		TrustManager[] trustAllCerts = new TrustManager[] {
+			new X509TrustManager() {
+				public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+					return null;
+				}
+				public void checkClientTrusted (java.security.cert.X509Certificate[] certs, String authType) {
+				}
+				public void checkServerTrusted (java.security.cert.X509Certificate[] certs, String authType) {
+				}
+			}
+		};
+		// Activate the new trust manager
+		try {
+			SSLContext sc = SSLContext.getInstance("SSL");
+			sc.init(null, trustAllCerts, new java.security.SecureRandom());
+			HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+		} catch (Exception e) {
+			IJ.log(""+e);
+		}
+	}
+	*/
 
 	/** Saves the current image, lookup table, selection or text window to the specified file path. 
 		The path must end in ".tif", ".jpg", ".gif", ".zip", ".raw", ".avi", ".bmp", ".fits", ".pgm", ".png", ".lut", ".roi" or ".txt".  */
@@ -1591,16 +1834,23 @@ public class IJ {
 	}
 
 	/** Saves the specified image, lookup table or selection to the specified file path. 
-		The file path must end with ".tif", ".jpg", ".gif", ".zip", ".raw", ".avi", ".bmp", 
-		".fits", ".pgm", ".png", ".lut", ".roi" or ".txt". */
+		The file path should end with ".tif", ".jpg", ".gif", ".zip", ".raw", ".avi", ".bmp", 
+		".fits", ".pgm", ".png", ".lut", ".roi" or ".txt". The specified image is saved in 
+		TIFF format if there is no extension. */
 	public static void save(ImagePlus imp, String path) {
+		ImagePlus imp2 = imp;
+		if (imp2==null)
+			imp2 = WindowManager.getCurrentImage();
 		int dotLoc = path.lastIndexOf('.');
+		if (dotLoc==-1 && imp2!=null) {
+			path = path + ".tif"; // save as TIFF if file name does not have an extension
+			dotLoc = path.lastIndexOf('.');
+		}
 		if (dotLoc!=-1) {
-			ImagePlus imp2 = imp;
-			if (imp2==null) imp2 = WindowManager.getCurrentImage();
 			String title = imp2!=null?imp2.getTitle():null;
 			saveAs(imp, path.substring(dotLoc+1), path);
-			if (title!=null) imp2.setTitle(title);
+			if (title!=null)
+				imp2.setTitle(title);
 		} else
 			error("The file path passed to IJ.save() method or save()\nmacro function is missing the required extension.\n \n\""+path+"\"");
 	}
@@ -1618,23 +1868,30 @@ public class IJ {
 		"jpeg", "gif", "zip", "raw", "avi", "bmp", "fits", "pgm", "png", 
 		"text image", "lut", "selection" or "xy Coordinates". */
  	public static void saveAs(ImagePlus imp, String format, String path) {
-		if (format==null) return;
-		if (path!=null && path.length()==0) path = null;
+		if (format==null)
+			return;
+		if (path!=null && path.length()==0)
+			path = null;
 		format = format.toLowerCase(Locale.US);
+		Roi roi2 = imp!=null?imp.getRoi():null;
+		if (roi2!=null)
+			roi2.endPaste();
 		if (format.indexOf("tif")!=-1) {
 			saveAsTiff(imp, path);
 			return;
-		} else if (format.indexOf("jpeg")!=-1  || format.indexOf("jpg")!=-1) {
+		} else if (format.indexOf("jpeg")!=-1 || format.indexOf("jpg")!=-1) {
 			path = updateExtension(path, ".jpg");
-			format = "Jpeg...";
+			JpegWriter.save(imp, path, FileSaver.getJpegQuality());
+			return;
 		} else if (format.indexOf("gif")!=-1) {
 			path = updateExtension(path, ".gif");
-			format = "Gif...";
+			GifWriter.save(imp, path);
+			return;
 		} else if (format.indexOf("text image")!=-1) {
 			path = updateExtension(path, ".txt");
 			format = "Text Image...";
 		} else if (format.indexOf("text")!=-1 || format.indexOf("txt")!=-1) {
-			if (path!=null && !path.endsWith(".xls"))
+			if (path!=null && !path.endsWith(".xls") && !path.endsWith(".csv") && !path.endsWith(".tsv"))
 				path = updateExtension(path, ".txt");
 			format = "Text...";
 		} else if (format.indexOf("zip")!=-1) {
@@ -1674,11 +1931,9 @@ public class IJ {
 		if (path==null)
 			run(format);
 		else {
-			if (path.contains(" ")) {
-				if (path.contains("]"))
-					error("ImageJ cannot save when file path contains both \" \" and \"]\"");
+			if (path.contains(" "))
 				run(imp, format, "save=["+path+"]");
-			} else
+			else
 				run(imp, format, "save="+path);
 		}
 	}
@@ -1691,7 +1946,8 @@ public class IJ {
 			imp = getImage();
 		if (path==null || path.equals(""))
 			return (new FileSaver(imp)).saveAsTiff();
-		path = updateExtension(path, ".tif");
+		if (!path.endsWith(".tiff"))
+			path = updateExtension(path, ".tif");
 		FileSaver fs = new FileSaver(imp);
 		boolean ok;
 		if (imp.getStackSize()>1)
@@ -1796,27 +2052,60 @@ public class IJ {
 	 }
 
 	 /** Creates a new imagePlus. <code>Type</code> should contain "8-bit", "16-bit", "32-bit" or "RGB". 
-		 In addition, it can contain "white", "black" or "ramp" (the default is "white"). <code>Width</code> 
+		 In addition, it can contain "white", "black" or "ramp". <code>Width</code> 
 	 	and <code>height</code> specify the width and height of the image in pixels.  
 	 	<code>Depth</code> specifies the number of stack slices. */
 	 public static ImagePlus createImage(String title, String type, int width, int height, int depth) {
 		type = type.toLowerCase(Locale.US);
 		int bitDepth = 8;
-		if (type.indexOf("16")!=-1) bitDepth = 16;
-		if (type.indexOf("24")!=-1||type.indexOf("rgb")!=-1) bitDepth = 24;
-		if (type.indexOf("32")!=-1) bitDepth = 32;
+		if (type.contains("16")) bitDepth = 16;
+		if (type.contains("24")||type.contains("rgb")) bitDepth = 24;
+		if (type.contains("32")) bitDepth = 32;
 		int options = NewImage.FILL_WHITE;
 		if (bitDepth==16 || bitDepth==32)
 			options = NewImage.FILL_BLACK;
-		if (type.indexOf("white")!=-1)
+		if (type.contains("white"))
 			options = NewImage.FILL_WHITE;
-		else if (type.indexOf("black")!=-1)
+		else if (type.contains("black"))
 			options = NewImage.FILL_BLACK;
-		else if (type.indexOf("ramp")!=-1)
+		else if (type.contains("ramp"))
 			options = NewImage.FILL_RAMP;
+		else if (type.contains("noise") || type.contains("random"))
+			options = NewImage.FILL_NOISE;
 		options += NewImage.CHECK_AVAILABLE_MEMORY;
 		return NewImage.createImage(title, width, height, depth, bitDepth, options);
 	}
+
+	/** Creates a new hyperstack.
+	* @param title   image name
+	* @param type  "8-bit", "16-bit", "32-bit" or "RGB".  May also
+	* contain "white" , "black" (the default), "ramp", "composite-mode",
+	* "color-mode", "grayscale-mode or "label".
+	* @param width  image width in pixels
+	* @param height image height in pixels
+	* @param channels number of channels
+	* @param slices number of slices
+	* @param frames number of frames
+	*/
+	 public static ImagePlus createImage(String title, String type, int width, int height, int channels, int slices, int frames) {
+		if (type.contains("label"))
+	 		type += "ramp";
+		if (!(type.contains("white")||type.contains("ramp")))
+	 		type += "black";
+		ImagePlus imp = IJ.createImage(title, type, width, height, channels*slices*frames);
+		imp.setDimensions(channels, slices, frames);
+		int mode = IJ.COLOR;
+		if (type.contains("composite"))
+			mode = IJ.COMPOSITE;
+		if (type.contains("grayscale"))
+			mode = IJ.GRAYSCALE;
+		if (channels>1 && imp.getBitDepth()!=24)
+			imp = new CompositeImage(imp, mode);
+		imp.setOpenAsHyperStack(true);
+		if (type.contains("label"))
+			HyperStackMaker.labelHyperstack(imp);
+		return imp;
+	 }
 
 	/** Creates a new hyperstack.
 	*  @param title   image name
@@ -1831,13 +2120,13 @@ public class IJ {
 		ImagePlus imp = createImage(title, width, height, channels*slices*frames, bitdepth);
 		imp.setDimensions(channels, slices, frames);
 		if (channels>1 && bitdepth!=24)
-			imp = new CompositeImage(imp, CompositeImage.COMPOSITE);
+			imp = new CompositeImage(imp, IJ.COMPOSITE);
 		imp.setOpenAsHyperStack(true);
 		return imp;
 	 }
 	 
 	 /** Opens a new image. <code>Type</code> should contain "8-bit", "16-bit", "32-bit" or "RGB". 
-		In addition, it can contain "white", "black" or "ramp" (the default is "white"). <code>Width</code> 
+		In addition, it can contain "white", "black" or "ramp". <code>Width</code> 
 		and <code>height</code> specify the width and height of the image in pixels.  
 		<code>Depth</code> specifies the number of stack slices. */
 	public static void newImage(String title, String type, int width, int height, int depth) {
@@ -1865,16 +2154,18 @@ public class IJ {
 	/** Causes IJ.error() output to be temporarily redirected to the "Log" window. */
 	public static void redirectErrorMessages() {
 		redirectErrorMessages = true;
+		lastErrorMessage = null;
 	}
 	
-	/** Set 'true' and IJ.error() output will be redirected to the "Log" window. */
+	/** Set 'true' and IJ.error() output will be temporarily redirected to the "Log" window. */
 	public static void redirectErrorMessages(boolean redirect) {
-		redirectErrorMessages2 = redirect;
+		redirectErrorMessages = redirect;
+		lastErrorMessage = null;
 	}
 
-	/** Returns the state of the  'redirectErrorMessages' flag. The File/Import/Image Sequence command sets this flag.*/
+	/** Returns the state of the  'redirectErrorMessages' flag, which is set by File/Import/Image Sequence. */
 	public static boolean redirectingErrorMessages() {
-		return redirectErrorMessages || redirectErrorMessages2;
+		return redirectErrorMessages;
 	}
 
 	/** Temporarily suppress "plugin not found" errors. */
@@ -1892,7 +2183,8 @@ public class IJ {
 				if (home!=null) {
 					if (!home.endsWith(Prefs.separator)) home+=Prefs.separator;
 					pluginsDir = home+"plugins"+Prefs.separator;
-					if (!(new File(pluginsDir)).isDirectory()) pluginsDir = home;
+					if (!(new File(pluginsDir)).isDirectory())
+						pluginsDir = home;
 				}
 			}
 			if (pluginsDir==null)
@@ -1909,6 +2201,9 @@ public class IJ {
 	
 	/** Returns the size, in pixels, of the primary display. */
 	public static Dimension getScreenSize() {
+		Rectangle bounds = GUI.getZeroBasedMaxBounds();
+		if (bounds!=null)
+			return new Dimension(bounds.width, bounds.height);
 		if (isWindows())  // GraphicsEnvironment.getConfigurations is *very* slow on Windows
 			return Toolkit.getDefaultToolkit().getScreenSize();
 		if (GraphicsEnvironment.isHeadless())
@@ -1918,11 +2213,32 @@ public class IJ {
 		GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
 		GraphicsDevice[] gd = ge.getScreenDevices();
 		GraphicsConfiguration[] gc = gd[0].getConfigurations();
-		Rectangle bounds = gc[0].getBounds();
-		if (bounds.x==0&&bounds.y==0)
+		bounds = gc[0].getBounds();
+		if ((bounds.x==0&&bounds.y==0) || (IJ.isLinux()&&gc.length>1))
 			return new Dimension(bounds.width, bounds.height);
 		else
 			return Toolkit.getDefaultToolkit().getScreenSize();
+	}
+	
+	/** Returns, as an array of strings, a list of the LUTs in the Image/Lookup Tables menu. */
+	public static String[] getLuts() {
+		ArrayList list = new ArrayList();
+		Hashtable commands = Menus.getCommands();
+		Menu lutsMenu = Menus.getImageJMenu("Image>Lookup Tables");
+		if (commands==null || lutsMenu==null)
+			return new String[0];
+		for (int i=0; i<lutsMenu.getItemCount(); i++) {
+			MenuItem menuItem = lutsMenu.getItem(i);
+			if (menuItem.getActionListeners().length == 0) // separator?
+				continue;
+			String label = menuItem.getLabel();
+			if (label.equals("Invert LUT") || label.equals("Apply LUT"))
+				continue;
+			String command = (String)commands.get(label);
+			if (command==null || command.startsWith("ij.plugin.LutLoader"))
+				list.add(label);
+		}
+		return (String[])list.toArray(new String[list.size()]);
 	}
 	
 	static void abort() {
@@ -1934,6 +2250,10 @@ public class IJ {
 		classLoader = loader;
 	}
 
+	public static void resetClassLoader() {
+		setClassLoader(null);
+	}
+
 	/** Displays a stack trace. Use the setExceptionHandler 
 		method() to override with a custom exception handler. */
 	public static void handleException(Throwable e) {
@@ -1941,13 +2261,18 @@ public class IJ {
 			exceptionHandler.handle(e);
 			return;
 		}
+		if (Macro.MACRO_CANCELED.equals(e.getMessage()))
+			return;
 		CharArrayWriter caw = new CharArrayWriter();
 		PrintWriter pw = new PrintWriter(caw);
 		e.printStackTrace(pw);
 		String s = caw.toString();
-		if (getInstance()!=null)
-			new TextWindow("Exception", s, 500, 300);
-		else
+		if (s!=null && s.contains("ThreadDeath"))
+			return;
+		if (getInstance()!=null) {
+			s = IJ.getInstance().getInfo()+"\n \n"+s;
+			new TextWindow("Exception", s, 500, 340);
+		} else
 			log(s);
 	}
 
@@ -1980,4 +2305,26 @@ public class IJ {
 		}
 	}
 
+	/** Adds a key-value pair to IJ.properties. The key
+	* and value are removed if 'value' is null.
+	*/
+	public static void setProperty(String key, Object value) {
+		if (properties==null)
+			properties = new Properties();
+		if (value==null)
+			properties.remove(key);
+		else
+			properties.put(key, value);
+	}
+
+	/** Returns the object in IJ.properties associated
+	*  with 'key', or null if 'key' is not found.
+	*/
+	public static Object getProperty(String key) {
+		if (properties==null)
+			return null;
+		else
+			return properties.get(key);
+	}
+	
 }

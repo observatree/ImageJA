@@ -27,7 +27,7 @@ public class Memory implements PlugIn {
 		String title = "Memory "+(IJ.is64Bit()?"(64-bit)":"(32-bit)");
 		GenericDialog gd = new GenericDialog(title);
 		gd.addNumericField("Maximum memory:", max, 0, 5, "MB");
-		gd.addNumericField("Parallel threads for stacks:", Prefs.getThreads(), 0, 5, "");
+		gd.addNumericField("Parallel threads:", Prefs.getThreads(), 0, 5, "");
 		gd.setInsets(12, 0, 0);
 		gd.addCheckbox("Keep multiple undo buffers", Prefs.keepUndoBuffers);
 		gd.setInsets(12, 0, 0);
@@ -45,16 +45,13 @@ public class Memory implements PlugIn {
 		}
 		if (unableToSet && max2!=max)
 			{showError(); return;}
-		if (max2<256 && IJ.isMacOSX()) max2 = 256;
-		if (max2<32 && IJ.isWindows()) max2 = 32;
+		if (IJ.isMacOSX() && max2<256)
+			max2 = 256;
+		else if (max2<32)
+			max2 = 32;
 		if (max2==max) return;
 		int limit = IJ.isWindows()?1600:1700;
 		String OSXInfo = "";
-		if (IJ.isMacOSX())
-			OSXInfo = "\n \nOn Max OS X, use\n"
-				+"/Applications/Utilities/Java/Java Preferences\n"
-				+"to switch to a 64-bit version of Java. You may\n"
-				+"also need to run \"AstroImageJ64\" instead of \"AstroImageJ\".";
 		if (max2>=limit && !IJ.is64Bit()) {
 			if (!IJ.showMessageWithCancel(title, 
 			"Note: setting the memory limit to a value\n"
@@ -62,8 +59,7 @@ public class Memory implements PlugIn {
 			+"may cause AstroImageJ to fail to start. The title of\n"
 			+"the Edit>Options>Memory & Threads dialog\n"
 			+"box changes to \"Memory (64-bit)\" when AstroImageJ\n"
-			+"is running on a 64-bit version of Java."
-			+ OSXInfo));
+			+"is running on a 64-bit version of Java."));
 				return;
 		}
 		try {
@@ -96,11 +92,12 @@ public class Memory implements PlugIn {
 		if (IJ.getApplet()!=null) return 0L;
 		long max = 0L;
 		if (IJ.isMacOSX()) {
-			if (IJ.is64Bit())
-				max = getMemorySetting("AstroImageJ64.app/Contents/Info.plist");
-			if (max==0L) {
-				max = getMemorySetting("AstroImageJ.app/Contents/Info.plist");
-			}
+			String appPath = System.getProperty("java.class.path");
+			if (appPath==null) return 0L;
+			int index = appPath.indexOf(".app/");
+			if (index==-1) return 0L;
+			appPath = appPath.substring(0,index+5);
+			max = getMemorySetting(appPath+"Contents/Info.plist");
 		} else
 			max = getMemorySetting("AstroImageJ.cfg");		
 		return max;
@@ -126,7 +123,8 @@ public class Memory implements PlugIn {
 	}
 
 	long getMemorySetting(String file) {
-		String path = Prefs.getHomeDir()+File.separator+file;
+		String path = file.startsWith("/")?file:Prefs.getImageJDir()+file;
+		if (IJ.debugMode) IJ.log("getMemorySetting: "+path);
 		f = new File(path);
 		if (!f.exists()) {
 			fileMissing = true;

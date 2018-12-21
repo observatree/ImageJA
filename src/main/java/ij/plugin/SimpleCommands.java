@@ -19,6 +19,8 @@ public class SimpleCommands implements PlugIn {
 			search();
 		else if (arg.equals("import")) 
 			Opener.openResultsTable("");
+		else if (arg.equals("table")) 
+			Opener.openTable("");
 		else if (arg.equals("rename"))
 			rename();
 		else if (arg.equals("reset"))
@@ -27,12 +29,33 @@ public class SimpleCommands implements PlugIn {
 			aboutPluginsHelp();
 		else if (arg.equals("install"))
 			installation();
+		else if (arg.equals("set"))
+			setSliceLabel();
 		else if (arg.equals("remove"))
 			removeStackLabels();
 		else if (arg.equals("itor"))
 			imageToResults();
 		else if (arg.equals("rtoi"))
 			resultsToImage();
+		else if (arg.equals("display"))
+			IJ.runMacroFile("ij.jar:ShowAllLuts", null);
+		else if (arg.equals("missing"))
+			showMissingPluginsMessage();
+		else if (arg.equals("fonts"))
+			showFonts();
+		else if (arg.equals("opencp"))
+			openControlPanel();
+		else if (arg.equals("magic"))
+			installMagicMontageTools();
+		else if (arg.equals("measure"))
+			IJ.runMacroFile("ij.jar:MeasureStack", null);
+	}
+	
+	private synchronized void showFonts() {
+		Thread t = new Thread(new Runnable() {
+			public void run() {IJ.runPlugIn("ij.plugin.Text", "");}
+		});
+		t.start();
 	}
 
 	private void reset() {
@@ -75,9 +98,7 @@ public class SimpleCommands implements PlugIn {
 		GenericDialog gd = new GenericDialog("Rename");
 		gd.addStringField("Title:", imp.getTitle(), 30);
 		gd.showDialog();
-		if (gd.wasCanceled())
-			return;
-		else
+		if (!gd.wasCanceled())
 			imp.setTitle(gd.getNextString());
 	}
 		
@@ -103,6 +124,31 @@ public class SimpleCommands implements PlugIn {
 			IJ.URL+"/plugins/jar-demo.html");
 	}
 	
+	private void setSliceLabel() {
+		ImagePlus imp = IJ.getImage();
+		int size = imp.getStackSize();
+		if (size==1) {
+			IJ.error("Stack required");
+			return;
+		}
+		ImageStack stack = imp.getStack();
+		int n = imp.getCurrentSlice();
+		String label = stack.getSliceLabel(n);
+		String label2 = label;
+		if (label2==null)
+			label2 = "";
+		GenericDialog gd = new GenericDialog("Set Slice Label ("+n+")");
+		gd.addStringField("Label:", label2, 30);
+		gd.showDialog();
+		if (gd.wasCanceled())
+			return;
+		label2 = gd.getNextString();
+		if (label2!=label) {
+			stack.setSliceLabel(label2, n);
+			imp.repaintWindow();
+		}
+	}
+
 	private void removeStackLabels() {
 		ImagePlus imp = IJ.getImage();
 		int size = imp.getStackSize();
@@ -120,13 +166,12 @@ public class SimpleCommands implements PlugIn {
 		ImagePlus imp = IJ.getImage();
 		ImageProcessor ip = imp.getProcessor();
 		ResultsTable rt = ResultsTable.createTableFromImage(ip);
-		rt.showRowNumbers(false);
 		rt.show("Results");
 	}
 	
 	private void resultsToImage() {
 		ResultsTable rt = ResultsTable.getResultsTable();
-		if (rt==null || rt.getCounter()==0) {
+		if (rt==null || rt.size()==0) {
 			IJ.error("Results to Image", "The Results table is empty");
 			return;
 		}
@@ -134,5 +179,31 @@ public class SimpleCommands implements PlugIn {
 		if (ip==null) return;
 		new ImagePlus("Results Table", ip).show();
 	}
+	
+	private void openControlPanel() {
+		Prefs.set("Control_Panel.@Main", "51 22 92 426");
+		Prefs.set("Control_Panel.Help.Examples", "144 107 261 373");
+		IJ.run("Control Panel...", "");
+	}
 
+	private void showMissingPluginsMessage() {
+		IJ.showMessage("Path Randomization", 
+			"Plugins were not loaded due to macOS Path Randomization.\n"+
+			"To work around this problem, move ImageJ.app out of the\n"+
+			"ImageJ folder and then copy it back. More information is at\n \n"+
+			IJ.URL+"/docs/install/osx.html#randomization");
+	}
+	
+	private void installMagicMontageTools() {
+		String name = "MagicMontageTools.txt";
+		String path = "/macros/"+name;
+		MacroInstaller mi = new MacroInstaller();
+		if (IJ.shiftKeyDown())
+			 Toolbar.showCode(name, mi.openFromIJJar(path));
+		else
+			try {
+				mi.installFromIJJar(path);
+			} catch (Exception e) {}
+	}
+		
 }

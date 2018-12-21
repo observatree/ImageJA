@@ -12,18 +12,17 @@ import java.awt.event.KeyEvent;
 import java.util.Vector;
 
 
-/** This plugin implements the commands in the Edit/Section submenu. */
+/** This plugin implements the commands in the Edit/Selection submenu. */
 public class Selection implements PlugIn, Measurements {
 	private ImagePlus imp;
 	private float[] kernel = {1f, 1f, 1f, 1f, 1f};
 	private float[] kernel3 = {1f, 1f, 1f};
-	private static String angle = "15"; // degrees
-	private static String enlarge = "15"; // pixels
 	private static int bandSize = 15; // pixels
-	private static boolean nonScalable;
 	private static Color linec, fillc;
 	private static int lineWidth = 1;
 	private static boolean smooth;
+	private static boolean adjust;
+
 	
 
 	public void run(String arg) {
@@ -64,48 +63,34 @@ public class Selection implements PlugIn, Measurements {
 			makeBand(imp);
 		else if (arg.equals("tobox"))
 			toBoundingBox(imp); 
-		else
-			runMacro(arg, imp);
+		else if (arg.equals("rotate"))
+			rotate(imp); 
+		else if (arg.equals("enlarge"))
+			enlarge(imp); 
 	}
 	
-	void runMacro(String arg, ImagePlus imp) {
-		boolean rotate = arg.equals("rotate");
+	private void rotate(ImagePlus imp) {
 		Roi roi = imp.getRoi();
-		if (rotate && IJ.macroRunning()) {
+		if (IJ.macroRunning()) {
 			String options = Macro.getOptions();
 			if (options!=null && (options.indexOf("grid=")!=-1||options.indexOf("interpolat")!=-1)) {
 				IJ.run("Rotate... ", options); // run Image>Transform>Rotate
 				return;
 			}
 		}
-		if (roi==null) {
-			noRoi(rotate?"Rotate":"Enlarge");
-			return;
-		}
-		double dangle = Tools.parseDouble(angle);
-		if (Double.isNaN(dangle)) {
-			dangle = 15;
-			angle = ""+dangle;
-		}
-		if (rotate && (roi instanceof ImageRoi)) {
-			dangle = IJ.getNumber("Angle (degrees):", dangle);
-			((ImageRoi)roi).rotate(dangle);
-			imp.draw();
-			angle = ""+dangle;
-			return;
-		}
-		Undo.setup(Undo.ROI, imp);
-		roi = (Roi)roi.clone();
-		if (rotate) {
-			String value = IJ.runMacroFile("ij.jar:RotateSelection", angle);
-			if (value!=null) angle = value;		
-		} else if (arg.equals("enlarge")) {
-			String value = IJ.runMacroFile("ij.jar:EnlargeSelection", enlarge); 
-			if (value!=null) enlarge = value; 
-			Roi.previousRoi = roi;
-		}
+		(new RoiRotator()).run("");
 	}
 	
+	private void enlarge(ImagePlus imp) {
+		Roi roi = imp.getRoi();
+		if (roi!=null) {
+			Undo.setup(Undo.ROI, imp);
+			roi = (Roi)roi.clone();
+			(new RoiEnlarger()).run("");
+		} else
+			noRoi("Enlarge");
+	}
+
 	/*
 	if selection is closed shape, create a circle with the same area and centroid, otherwise use<br>
 	the Pratt method to fit a circle to the points that define the line or multi-point selection.<br>
@@ -113,7 +98,7 @@ public class Selection implements PlugIn, Measurements {
 	Original code: Nikolai Chernov's MATLAB script for Newton-based Pratt fit.<br>
 	(http://www.math.uab.edu/~chernov/cl/MATLABcircle.html)<br>
 	Java version: https://github.com/mdoube/BoneJ/blob/master/src/org/doube/geometry/FitCircle.java<br>
-	@authors Nikolai Chernov, Michael Doube, Ved Sharma
+	Authors: Nikolai Chernov, Michael Doube, Ved Sharma
 	*/
 	void fitCircle(ImagePlus imp) {
 		Roi roi = imp.getRoi();
@@ -239,7 +224,7 @@ public class Selection implements PlugIn, Measurements {
 		int type = roi.getType();
 		boolean segmentedSelection = type==Roi.POLYGON||type==Roi.POLYLINE;
 		if (!(segmentedSelection||type==Roi.FREEROI||type==Roi.TRACED_ROI||type==Roi.FREELINE))
-			{IJ.error("Spline", "Polygon or polyline selection required"); return;}
+			{IJ.error("Spline Fit", "Polygon or polyline selection required"); return;}
 		if (roi instanceof EllipseRoi)
 			return;
 		PolygonRoi p = (PolygonRoi)roi;
@@ -272,22 +257,25 @@ public class Selection implements PlugIn, Measurements {
 		GenericDialog gd = new GenericDialog("Interpolate");
 		gd.addNumericField("Interval:", 1.0, 1, 4, "pixel");
 		gd.addCheckbox("Smooth", IJ.isMacro()?false:smooth);
+		gd.addCheckbox("Adjust interval to match", IJ.isMacro()?false:adjust);
 		gd.showDialog();
 		if (gd.wasCanceled())
 			return;
 		double interval = gd.getNextNumber();
 		smooth = gd.getNextBoolean();
 		Undo.setup(Undo.ROI, imp);
-		FloatPolygon poly = roi.getInterpolatedPolygon(interval, smooth);
+		adjust = gd.getNextBoolean();
+		int sign = adjust ? -1 : 1;
+		FloatPolygon poly = roi.getInterpolatedPolygon(sign*interval, smooth);
 		int t = roi.getType();
 		int type = roi.isLine()?Roi.FREELINE:Roi.FREEROI;
 		if (t==Roi.POLYGON && interval>1.0)
 			type = Roi.POLYGON;
-		if ((t==Roi.RECTANGLE||t==Roi.OVAL||t==Roi.FREEROI) && interval>=5.0)
+		if ((t==Roi.RECTANGLE||t==Roi.OVAL||t==Roi.FREEROI) && interval>=8.0)
 			type = Roi.POLYGON;
-		if ((t==Roi.LINE||t==Roi.FREELINE) && interval>=5.0)
+		if ((t==Roi.LINE||t==Roi.FREELINE) && interval>=8.0)
 			type = Roi.POLYLINE;
-		if (t==Roi.POLYLINE && interval>=1.0)
+		if (t==Roi.POLYLINE && interval>=8.0)
 			type = Roi.POLYLINE;
 		ImageCanvas ic = imp.getCanvas();
 		if (poly.npoints<=150 && ic!=null && ic.getMagnification()>=12.0)
@@ -301,12 +289,13 @@ public class Selection implements PlugIn, Measurements {
 		imp.setRoi(p);
 	}
 	
-	private void transferProperties(Roi roi1, Roi roi2) {
+	private static void transferProperties(Roi roi1, Roi roi2) {
 		if (roi1==null || roi2==null)
 			return;
 		roi2.setStrokeColor(roi1.getStrokeColor());
 		if (roi1.getStroke()!=null)
 			roi2.setStroke(roi1.getStroke());
+		roi2.setDrawOffset(roi1.getDrawOffset());
 	}
 	
 	PolygonRoi trimPolygon(PolygonRoi roi, double length) {
@@ -427,6 +416,7 @@ public class Selection implements PlugIn, Measurements {
 		if (roi.getStroke()!=null)
 			p.setStrokeWidth(roi.getStrokeWidth());
 		p.setStrokeColor(roi.getStrokeColor());
+		p.setDrawOffset(roi.getDrawOffset());
 		p.setName(roi.getName());
 		imp.setRoi(p);
 		return p;
@@ -535,41 +525,56 @@ public class Selection implements PlugIn, Measurements {
 		Roi roi = imp.getRoi();
 		boolean useInvertingLut = Prefs.useInvertingLut;
 		Prefs.useInvertingLut = false;
-		if (roi==null || !(roi.isArea()||roi.getType()==Roi.POINT)) {
+		boolean selectAll = roi!=null && roi.getType()==Roi.RECTANGLE && roi.getBounds().width==imp.getWidth()
+			&& roi.getBounds().height==imp.getHeight() && imp.isThreshold();
+		boolean overlay = imp.getOverlay()!=null && imp.getProcessor().getMinThreshold()==ImageProcessor.NO_THRESHOLD;
+		if (!overlay && (roi==null || selectAll)) {
 			createMaskFromThreshold(imp);
 			Prefs.useInvertingLut = useInvertingLut;
 			return;
 		}
+		if (roi==null && imp.getOverlay()==null) {
+			IJ.error("Create Mask", "Selection, overlay or threshold required");
+			return;
+		}
+		ByteProcessor mask = imp.createRoiMask();
+		if (!Prefs.blackBackground)
+			mask.invertLut();
 		ImagePlus maskImp = null;
 		Frame frame = WindowManager.getFrame("Mask");
 		if (frame!=null && (frame instanceof ImageWindow))
 			maskImp = ((ImageWindow)frame).getImagePlus();
-		if (maskImp==null) {
-			ImageProcessor ip = new ByteProcessor(imp.getWidth(), imp.getHeight());
-			if (!Prefs.blackBackground)
-				ip.invertLut();
-			maskImp = new ImagePlus("Mask", ip);
+		if (maskImp!=null && maskImp.getBitDepth()==8) {
+			ImageProcessor ip = maskImp.getProcessor();
+			ip.copyBits(mask, 0, 0, Blitter.OR);
+			maskImp.setProcessor(ip);
+		} else {
+			maskImp = new ImagePlus("Mask", mask);
 			maskImp.show();
 		}
-		ImageProcessor ip = maskImp.getProcessor();
-		ip.setRoi(roi);
-		ip.setValue(255);
-		ip.fill(ip.getMask());
-		maskImp.updateAndDraw();
+		Calibration cal = imp.getCalibration();
+		if (cal.scaled()) {
+			Calibration cal2 = maskImp.getCalibration();
+			cal2.pixelWidth = cal.pixelWidth;
+			cal2.pixelHeight = cal.pixelHeight;
+			cal2.setUnit(cal.getUnit());
+		}
+		maskImp.updateAndRepaintWindow();
 		Prefs.useInvertingLut = useInvertingLut;
+		Recorder.recordCall("mask = imp.createRoiMask();");
 	}
 	
 	void createMaskFromThreshold(ImagePlus imp) {
 		ImageProcessor ip = imp.getProcessor();
-		if (ip.getMinThreshold()==ImageProcessor.NO_THRESHOLD)
-			{IJ.error("Create Mask", "Area selection or thresholded image required"); return;}
-		double t1 = ip.getMinThreshold();
-		double t2 = ip.getMaxThreshold();
-		IJ.run("Duplicate...", "title=mask");
-		ImagePlus imp2 = WindowManager.getCurrentImage();
-		ImageProcessor ip2 = imp2.getProcessor();
-		ip2.setThreshold(t1, t2, ImageProcessor.NO_LUT_UPDATE);
-		IJ.run("Convert to Mask");
+		if (ip.getMinThreshold()==ImageProcessor.NO_THRESHOLD) {
+			IJ.error("Create Mask", "Area selection, overlay or thresholded image required");
+			return;
+		}
+		ByteProcessor mask = imp.createThresholdMask();
+		if (!Prefs.blackBackground)
+			mask.invertLut();
+		new ImagePlus("mask",mask).show();
+		Recorder.recordCall("mask = imp.createThresholdMask();");
 	}
 
 	void createSelectionFromMask(ImagePlus imp) {
@@ -606,28 +611,55 @@ public class Selection implements PlugIn, Measurements {
 		imp.setRoi(s1.xor(s2));
 	}
 	
-	void lineToArea(ImagePlus imp) {
+	private void lineToArea(ImagePlus imp) {
 		Roi roi = imp.getRoi();
 		if (roi==null || !roi.isLine())
 			{IJ.error("Line to Area", "Line selection required"); return;}
 		Undo.setup(Undo.ROI, imp);
-		ImageProcessor ip2 = new ByteProcessor(imp.getWidth(), imp.getHeight());
-		ip2.setColor(255);
-		if (roi.getType()==Roi.LINE && roi.getStrokeWidth()>1)
-			ip2.fillPolygon(roi.getPolygon());
-		else
+		Roi roi2 = lineToArea(roi);
+		imp.setRoi(roi2);
+		Roi.previousRoi = (Roi)roi.clone();
+	}
+	
+	/** Converts a line selection into an area selection. */
+	public static Roi lineToArea(Roi roi) {
+		Roi roi2 = null;
+		if (roi.getType()==Roi.LINE) {
+			double width = roi.getStrokeWidth();
+			if (width<=1.0)
+				roi.setStrokeWidth(1.0000001);
+			FloatPolygon p = roi.getFloatPolygon();
+			roi.setStrokeWidth(width);
+			roi2 = new PolygonRoi(p, Roi.POLYGON);
+			roi2.setDrawOffset(roi.getDrawOffset());
+		} else {
+			roi = (Roi)roi.clone();
+			int lwidth = (int)roi.getStrokeWidth();
+			if (lwidth<1)
+				lwidth = 1;
+			Rectangle bounds = roi.getBounds();
+			int width = bounds.width + lwidth*2;
+			int height = bounds.height + lwidth*2;
+			ImageProcessor ip2 = new ByteProcessor(width, height);
+			roi.setLocation(lwidth, lwidth);
+			ip2.setColor(255);
 			roi.drawPixels(ip2);
-		//new ImagePlus("ip2", ip2.duplicate()).show();
-		ip2.setThreshold(255, 255, ImageProcessor.NO_LUT_UPDATE);
-		ThresholdToSelection tts = new ThresholdToSelection();
-		Roi roi2 = tts.convert(ip2);
+			ip2.setThreshold(255, 255, ImageProcessor.NO_LUT_UPDATE);
+			ThresholdToSelection tts = new ThresholdToSelection();
+			roi2 = tts.convert(ip2);
+			if (roi2==null)
+				return roi;
+			if (bounds.x==0&&bounds.y==0)
+				roi2.setLocation(0, 0);
+			else
+				roi2.setLocation(bounds.x-lwidth/2, bounds.y-lwidth/2);
+		}
 		transferProperties(roi, roi2);
-		roi2.setStroke(null);
+		roi2.setStrokeWidth(0);
 		Color c = roi2.getStrokeColor();
 		if (c!=null)  // remove any transparency
 			roi2.setStrokeColor(new Color(c.getRed(),c.getGreen(),c.getBlue()));
-		imp.setRoi(roi2);
-		Roi.previousRoi = (Roi)roi.clone();
+		return roi2;
 	}
 	
 	void areaToLine(ImagePlus imp) {
@@ -697,11 +729,17 @@ public class Selection implements PlugIn, Measurements {
 				}
 			}
 		}
+		rm.allowRecording(true);
 		rm.runCommand("add");
+		rm.allowRecording(false);
 		IJ.setKeyUp(IJ.ALL_KEYS);
 	}
 	
 	boolean setProperties(String title, Roi roi) {
+		if ((roi instanceof PointRoi) && Toolbar.getMultiPointMode() && IJ.altKeyDown()) {
+			((PointRoi)roi).displayCounts();
+			return true;
+		}
 		Frame f = WindowManager.getFrontWindow();
 		if (f!=null && f.getTitle().indexOf("3D Viewer")!=-1)
 			return false;
@@ -710,7 +748,10 @@ public class Selection implements PlugIn, Measurements {
 			return false;
 		}
 		RoiProperties rp = new RoiProperties(title, roi);
-		return rp.showDialog();
+		boolean ok = rp.showDialog();
+		if (IJ.debugMode)
+			IJ.log(roi.getDebugInfo());
+		return ok;
 	}
 	
 	private void makeBand(ImagePlus imp) {
@@ -758,7 +799,10 @@ public class Selection implements PlugIn, Measurements {
 		ImagePlus edm = new ImagePlus("mask", mask);
 		boolean saveBlackBackground = Prefs.blackBackground;
 		Prefs.blackBackground = false;
+		int saveType = EDM.getOutputType();
+		EDM.setOutputType(EDM.BYTE_OVERWRITE);
 		IJ.run(edm, "Distance Map", "");
+		EDM.setOutputType(saveType);
 		Prefs.blackBackground = saveBlackBackground;
 		ip = edm.getProcessor();
 		ip.setThreshold(0, n, ImageProcessor.NO_LUT_UPDATE);
