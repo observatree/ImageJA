@@ -222,16 +222,6 @@ public class PlotWindow extends ImageWindow implements ActionListener, ItemListe
 
 		list = new Button(" List ");
 		list.addActionListener(this);
-<<<<<<< HEAD
-		buttons.add(list);
-		save = new Button("Save...");
-		save.addActionListener(this);
-		buttons.add(save);
-		copy = new Button(getTitle().startsWith("Seeing Profile")?"Save Aperture":"Copy...");
-		copy.addActionListener(this);
-		buttons.add(copy);
-		if (plot!=null && plot.getSourceImageID()!=0) {
-=======
 		bottomPanel.add(list);
 		bottomPanel.setLayout(new FlowLayout(FlowLayout.RIGHT,hgap,0));
 		data = new Button(dataButtonLabel);
@@ -241,7 +231,6 @@ public class PlotWindow extends ImageWindow implements ActionListener, ItemListe
 		more.addActionListener(this);
 		bottomPanel.add(more);
 		if (plot!=null && plot.getPlotMaker()!=null) {
->>>>>>> master
 			live = new Button("Live");
 			live.addActionListener(this);
 			bottomPanel.add(live);
@@ -400,7 +389,7 @@ public class PlotWindow extends ImageWindow implements ActionListener, ItemListe
 			Prefs.set("aperture.radius",Prefs.get("seeingprofile.radius", 20));
 			Prefs.set("aperture.rback1",Prefs.get("seeingprofile.rback1", 30));
 			Prefs.set("aperture.rback2",Prefs.get("seeingprofile.rback2", 40));
-			Prefs.set"setaperture.aperturechanged",true);
+			Prefs.set("setaperture.aperturechanged",true);
 		}
 		// In the main line, the preceding 15 lines is simply a single statement: saveAsText().
 		else if (b==menuItems[COPY])

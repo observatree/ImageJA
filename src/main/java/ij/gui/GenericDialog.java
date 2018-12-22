@@ -90,6 +90,14 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 		this(title, getParentFrame());
 	}
 
+	/** The AstroImageJ plugins use this legacy variant of the GenericDialog constructor. */
+	public GenericDialog(String title, int x, int y) {
+		this(title, getParentFrame());
+		positionDialog = true;
+		xPosition = x;
+		yPosition = y;
+	}
+
 	private static Frame getParentFrame() {
 		Frame parent = WindowManager.getCurrentImage()!=null?
 			(Frame)WindowManager.getCurrentImage().getWindow():IJ.getInstance()!=null?IJ.getInstance():new Frame();
@@ -123,11 +131,11 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
     }
 
 	/** Adds a numeric field. The first word of the label must be
-		unique or command recording will not work.
-	* @param label			the label
-	* @param defaultValue	value to be initially displayed
-	* @param digits			number of digits to right of decimal point
-	*/
+	 unique or command recording will not work.
+	 * @param label			the label
+	 * @param defaultValue	value to be initially displayed
+	 * @param digits			number of digits to right of decimal point
+	 */
 	public void addNumericField(String label, double defaultValue, int digits) {
 		addNumericField(label, defaultValue, digits, 6, null);
 	}

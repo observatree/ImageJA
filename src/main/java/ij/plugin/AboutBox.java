@@ -25,7 +25,7 @@ import java.awt.image.*;
 		text[6] = "AstroImageJ is in the public domain";
         text[7] = "AstroImageJ "+IJ.getAstroVersion();
         text[8] = "Karen Collins, John Kielkopf";
-        text[9] = "University of Louisville";
+        text[9] = "Port to Java 8: Brian Hill";
 		ImageProcessor ip = null;
 		ImageJ ij = IJ.getInstance();
 		URL url = ij .getClass() .getResource("/about.jpg");

@@ -480,7 +480,7 @@ public class ImageCanvas extends Canvas implements MouseListener, MouseMotionLis
 		g.setColor(defaultColor);
 	} 
 
-	public void drawZoomIndicator(Graphics g) {
+	protected void drawZoomIndicator(Graphics g) {
 		if (hideZoomIndicator)
 			return;
 		int x1 = 10;

@@ -355,7 +355,7 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
     	}
     	if (imp.isInvertedLut())
     		s += " (inverting LUT)";
-     	return s+"; "+getImageSize(imp);
+     	return s+"; "+getImageSize(imp)+"; "+extraInfo;
     }
     
     public static String getImageSize(ImagePlus imp) {
@@ -372,7 +372,7 @@ public class ImageWindow extends Frame implements FocusListener, WindowListener,
 	   	else
     		{s2=IJ.d2s(size/1048576.0,1); s3="GB";}
     	if (s2.endsWith(".0")) s2 = s2.substring(0, s2.length()-2);
-    	return s2+s3+extraInfo;
+    	return s2+s3;
     }
     
     private String d2s(double n) {

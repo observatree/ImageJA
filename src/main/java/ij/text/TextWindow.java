@@ -173,7 +173,7 @@ public class TextWindow extends Frame implements ActionListener, FocusListener, 
 		m.add(new MenuItem("Save Settings"));
 		m.addActionListener(this);
 		mb.add(m);
-		if (getTitle().equals("Results") || getTitle().contains("Measure")) {
+		if (getTitle().contains("Results") || getTitle().contains("Measure")) {
 			if (getTitle().contains("Measure")) m = new Menu("Options"); else m = new Menu("Results");
 			if (getTitle().contains("Results")) m.add(new MenuItem("Clear Results"));
 			if (getTitle().contains("Results")) m.add(new MenuItem("Summarize"));

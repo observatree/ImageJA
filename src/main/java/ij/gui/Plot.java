@@ -189,7 +189,7 @@ public class Plot implements Cloneable {
 	Font currentFont = defaultFont;					//font as changed by setFont or setFontSize, must never be null
 	private double xScale, yScale;					//pixels per data unit
 	private int xBasePxl, yBasePxl;					//pixel coordinates corresponding to 0
-	private int maxIntervals = 12;					//maximum number of intervals between ticks or grid lines
+	private int maxIntervals = 50;					//maximum number of intervals between ticks or grid lines
 	private int tickLength = 7;						//length of major ticks
 	private int minorTickLength = 3;				//length of minor ticks
 	private Color gridColor = new Color(0xc0c0c0);	//light gray
@@ -540,51 +540,17 @@ public class Plot implements Cloneable {
 			maxIntervals = intervals;
 	}
 
-<<<<<<< HEAD
-	/** Draws text at the specified location, where (0,0)
-	 * is the upper left corner of the the plot frame and (1,1) is
-	 * the lower right corner. */
-	public void addLabel(double x, double y, String label) {
-		setup();
-		int xt = LEFT_MARGIN + (int)(x*frameWidth);
-		int yt = TOP_MARGIN + (int)(y*frameHeight);
-		ip.drawString(label, xt, yt);
-    }
-
-    public void addTitle(double x, double y, String label) {
-        setup();
-        int xt = LEFT_MARGIN + (int)(x*frameWidth);
-        int yt = font.getSize() + (int)(y*(frameHeight+TOP_MARGIN-font.getSize()));
-        ip.drawString(label, xt, yt);
-	}
-
-
-	// Between ImageJ v1.47i and v1.52i, the following dead code, which was already commented
-	// out, was removed entirely, along with the setJustification() method that follows.
-		/* Draws text at the specified location, using the coordinate system defined
-				by setLimits() and the justification specified by setJustification(). */
-	//	public void addText(String text, double x, double y) {
-	//		setup();
-	//		int xt = LEFT_MARGIN + (int)((x-xMin)*xScale);
-	//		int yt = TOP_MARGIN + frameHeight - (int)((y-yMin)*yScale);
-	//		if (justification==CENTER)
-	//			xt -= ip.getStringWidth(text)/2;
-	//		else if (justification==RIGHT)
-	//			xt -= ip.getStringWidth(text);
-	//		ip.drawString(text, xt, yt);
-	//	}
-	
-	/** Sets the justification used by addLabel(), where <code>justification</code>
-	 * is Plot.LEFT, Plot.CENTER or Plot.RIGHT. */
-	public void setJustification(int justification) {
-		setup();
-		ip.setJustification(justification);
-	}
-
 	/** Sets the length of the major tick in pixels.
 	 *	Call updateImage() thereafter to make the change visible (if the image is shown already). */
 	public void setTickLength(int tickLength) {
 		tickLength = tickLength;
+	}
+
+
+    public void addTitle(double x, double y, String label) {
+        int xt = LEFT_MARGIN + (int)(x*frameWidth);
+        int yt = DEFAULT_FONT.getSize() + (int)(y*(frameHeight+TOP_MARGIN-DEFAULT_FONT.getSize()));
+        ip.drawString(label, xt, yt);
 	}
 
 	/** Sets the length of the minor tick in pixels. */
@@ -600,20 +566,6 @@ public class Plot implements Cloneable {
 		flags = flags & (~unchangedFlags);	  //remove flags that should not be affected
 		pp.axisFlags = (pp.axisFlags & unchangedFlags) | flags;
 	}
-
-	// Between ImageJ v1.47i and v1.52i, the following method was removed.
-	// It is probably dead code.
-	/* Draws a line using the coordinate system defined by setLimits(). */
-//	public void drawLine(double x1, double y1, double x2, double y2) {
-//		setup();
-//		int ix1 = LEFT_MARGIN + (int) Math.round((x1 - xMin) * xScale);
-//		int iy1 = TOP_MARGIN + frameHeight - (int) Math.round((y1 - yMin) * yScale);
-//		int ix2 = LEFT_MARGIN + (int) Math.round((x2 - xMin) * xScale);
-//		int iy2 = TOP_MARGIN + frameHeight - (int) Math.round((y2 - yMin) * yScale);
-//		ip.setClipRect(frame);
-//		ip.drawLine(ix1, iy1, ix2, iy2);
-//		ip.setClipRect(null);
-//	}
 
 	/** Returns the flags that control the axes */
 	public int getFlags() {
@@ -632,181 +584,11 @@ public class Plot implements Cloneable {
 		pp.axisFlags = axisYLog ? pp.axisFlags | Y_LOG_NUMBERS : pp.axisFlags & (~Y_LOG_NUMBERS);
 	}
 
-<<<<<<< HEAD
-	void setup() {
-		if (initialized)
-			return;
-		initialized = true;
-		createImage();
-		ip.setColor(Color.black);
-		if (lineWidth>3)
-			lineWidth = 3;
-		ip.setLineWidth(lineWidth);
-		ip.setFont(font);
-		ip.setAntialiasedText(true);
-		if (frameWidth==0) {
-			frameWidth = plotWidth;
-			frameHeight = plotHeight;
-		}
-		frame = new Rectangle(LEFT_MARGIN, TOP_MARGIN, frameWidth, frameHeight);
-		setScaleAndDrawAxisLabels();
-	}
-	
-	void setScaleAndDrawAxisLabels() {
-		if ((xMax-xMin)==0.0)
-			xScale = 1.0;
-		else
-			xScale = frame.width/(xMax-xMin);
-		if ((yMax-yMin)==0.0)
-			yScale = 1.0;
-		else
-			yScale = frame.height/(yMax-yMin);
-		if (PlotWindow.noGridLines)
-			drawAxisLabels();
-		else
-			drawTicksEtc();
-	}
-	
-	void drawAxisLabels() {
-		int digits = getDigits(yMin, yMax);
-		String s = IJ.d2s(yMax, digits);
-		int sw = ip.getStringWidth(s);
-		if ((sw+4)>LEFT_MARGIN)
-			ip.drawString(s, 4, TOP_MARGIN-4);
-		else
-			ip.drawString(s, LEFT_MARGIN-ip.getStringWidth(s)-4, TOP_MARGIN+10);
-		s = IJ.d2s(yMin, digits);
-		sw = ip.getStringWidth(s);
-		if ((sw+4)>LEFT_MARGIN)
-			ip.drawString(s, 4, TOP_MARGIN+frame.height);
-		else
-			ip.drawString(s, LEFT_MARGIN-ip.getStringWidth(s)-4, TOP_MARGIN+frame.height);
-		FontMetrics fm = ip.getFontMetrics();
-		int x = LEFT_MARGIN;
-		int y = TOP_MARGIN + frame.height + fm.getAscent() + 6;
-		digits = getDigits(xMin, xMax);
-		ip.drawString(IJ.d2s(xMin,digits), x, y);
-		s = IJ.d2s(xMax,digits);
-		ip.drawString(s, x + frame.width-ip.getStringWidth(s)+6, y);
-		ip.drawString(xLabel, LEFT_MARGIN+(frame.width-ip.getStringWidth(xLabel))/2, y+3);
-		drawYLabel(yLabel,LEFT_MARGIN-4,TOP_MARGIN,frame.height, fm);
-	}
-	
-	void drawTicksEtc() {
-		int fontAscent = ip.getFontMetrics().getAscent();
-		int fontMaxAscent = ip.getFontMetrics().getMaxAscent();
-		if ((flags&(X_NUMBERS + X_TICKS + X_GRID)) != 0) {
-			double step = Math.abs(Math.max(frame.width/MAX_INTERVALS, MIN_X_GRIDWIDTH)/xScale); //the smallest allowable increment
-			step = niceNumber(step);
-			int i1, i2;
-			if ((flags&X_FORCE2GRID) != 0) {
-				i1 = (int)Math.floor(Math.min(xMin,xMax)/step+1.e-10);	//this also allows for inverted xMin, xMax
-				i2 = (int)Math.ceil(Math.max(xMin,xMax)/step-1.e-10);
-				xMin = i1*step;
-				xMax = i2*step;
-				xScale = frame.width/(xMax-xMin);						//rescale to make it fit
-			} else {
-				i1 = (int)Math.ceil(Math.min(xMin,xMax)/step-1.e-10);
-				i2 = (int)Math.floor(Math.max(xMin,xMax)/step+1.e-10);
-			}
-			int digits = -(int)Math.floor(Math.log(step)/Math.log(10)+1e-6);
-			if (digits < 0) digits = 0;
-			if (digits>5) digits = -3; // use scientific notation
-			int y1 = TOP_MARGIN;
-			int y2 = TOP_MARGIN+frame.height;
-			int yNumbers = y2 + fontAscent + 7;
-			for (int i=0; i<=(i2-i1); i++) {
-				double v = (i+i1)*step;
-				int x = (int)Math.round((v - xMin)*xScale) + LEFT_MARGIN;
-				if ((flags&X_GRID) != 0) {
-					ip.setColor(gridColor);
-					ip.drawLine(x, y1, x, y2);
-					ip.setColor(Color.black);
-				}
-				if ((flags&X_TICKS) !=0) {
-					ip.drawLine(x, y1, x, y1+TICK_LENGTH);
-					ip.drawLine(x, y2, x, y2-TICK_LENGTH);
-				}
-				if ((flags&X_NUMBERS) != 0) {
-					String s = IJ.d2s(v,digits);
-					ip.drawString(s, x-ip.getStringWidth(s)/2, yNumbers);
-				}
-			}
-		}
-		int maxNumWidth = 0;
-		if ((flags&(Y_NUMBERS + Y_TICKS + Y_GRID)) != 0) {
-			double step = Math.abs(Math.max(frame.height/MAX_INTERVALS, MIN_Y_GRIDWIDTH)/yScale); //the smallest allowable increment
-			step = niceNumber(step);
-			int i1, i2;
-			if ((flags&X_FORCE2GRID) != 0) {
-				i1 = (int)Math.floor(Math.min(yMin,yMax)/step+1.e-10);	//this also allows for inverted xMin, xMax
-				i2 = (int)Math.ceil(Math.max(yMin,yMax)/step-1.e-10);
-				yMin = i1*step;
-				yMax = i2*step;
-				yScale = frame.height/(yMax-yMin);						//rescale to make it fit
-			} else {
-				i1 = (int)Math.ceil(Math.min(yMin,yMax)/step-1.e-10);
-				i2 = (int)Math.floor(Math.max(yMin,yMax)/step+1.e-10);
-			}
-			int digits = -(int)Math.floor(Math.log(step)/Math.log(10)+1e-6);
-			if (digits < 0) digits = 0;
-			if (digits>5) digits = -3; // use scientific notation
-			int x1 = LEFT_MARGIN;
-			int x2 = LEFT_MARGIN+frame.width;
-			for (int i=0; i<=(i2-i1); i++) {
-				double v = (i+i1)*step;
-				int y = TOP_MARGIN + frame.height - (int)Math.round((v - yMin)*yScale);
-				if ((flags&Y_GRID) != 0) {
-					ip.setColor(gridColor);
-					ip.drawLine(x1, y, x2, y);
-					ip.setColor(Color.black);
-				}
-				if ((flags&Y_TICKS) !=0) {
-					ip.drawLine(x1, y, x1+TICK_LENGTH, y);
-					ip.drawLine(x2, y, x2-TICK_LENGTH, y);
-				}
-				if ((flags&Y_NUMBERS) != 0) {
-					String s = IJ.d2s(v,digits);
-					int w = ip.getStringWidth(s);
-					if (w>maxNumWidth) maxNumWidth = w;
-					ip.drawString(s, LEFT_MARGIN-w-4, y+fontMaxAscent/2+1);
-				}
-			}
-		}
-		if ((flags&Y_NUMBERS)==0) {					//simply note y-axis min&max
-			int digits = getDigits(yMin, yMax);
-			String s = IJ.d2s(yMax, digits);
-			int sw = ip.getStringWidth(s);
-			if ((sw+4)>LEFT_MARGIN)
-				ip.drawString(s, 4, TOP_MARGIN-4);
-			else
-				ip.drawString(s, LEFT_MARGIN-ip.getStringWidth(s)-4, TOP_MARGIN+10);
-			s = IJ.d2s(yMin, digits);
-			sw = ip.getStringWidth(s);
-			if ((sw+4)>LEFT_MARGIN)
-				ip.drawString(s, 4, TOP_MARGIN+frame.height);
-			else
-				ip.drawString(s, LEFT_MARGIN-ip.getStringWidth(s)-4, TOP_MARGIN+frame.height);
-		}
-		FontMetrics fm = ip.getFontMetrics();
-		int x = LEFT_MARGIN;
-		int y = TOP_MARGIN + frame.height + fm.getAscent() + 6;
-		if ((flags&X_NUMBERS)==0) {					//simply note x-axis min&max
-			int digits = getDigits(xMin, xMax);
-			ip.drawString(IJ.d2s(xMin,digits), x, y);
-			String s = IJ.d2s(xMax,digits);
-			ip.drawString(s, x + frame.width-ip.getStringWidth(s)+6, y);
-		} else
-			y += fm.getAscent();					//space needed for x numbers
-		ip.drawString(xLabel, LEFT_MARGIN+(frame.width-ip.getStringWidth(xLabel))/2, y+6);
-		drawYLabel(yLabel,LEFT_MARGIN-maxNumWidth-4,TOP_MARGIN,frame.height, fm);
-=======
 	/** Sets whether to show major ticks at the x axis.
 	 *	Call updateImage() thereafter to make the change visible (if the image is shown already). */
 
 	public void setXTicks(boolean xTicks) {
 		pp.axisFlags = xTicks ? pp.axisFlags | X_TICKS : pp.axisFlags & (~X_TICKS);
->>>>>>> master
 	}
 
 	/** Sets whether to show major ticks at the y axis.

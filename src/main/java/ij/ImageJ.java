@@ -85,7 +85,7 @@ public class ImageJ extends Frame implements ActionListener,
 	public static final Font SansSerif12 = new Font("SansSerif", Font.PLAIN, 12);
 	/** Address of socket where Image accepts commands */
 	public static final int DEFAULT_PORT = 57294;
-    public static final String ASTROVERSION = "db3.2.21";
+    public static final String ASTROVERSION = "4.0.0";
 	
 	/** Run as normal application. */
 	public static final int STANDALONE = 0;
