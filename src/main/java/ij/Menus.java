@@ -239,7 +239,7 @@ public class Menus {
 		help.addSeparator();
 		Menu aboutMenu = getMenu("Help>About Plugins", true);
 		addPlugInItem(help, "About ImageJ...", "ij.plugin.AboutBox", 0, false);
-        addPlugInItem(help, "About AstroImageJ...", "ij.plugin.AboutBox", 0, false);
+		addPlugInItem(help, "About AstroImageJ...", "ij.plugin.AboutBox", 0, false);
 				
 		if (applet==null) {
 			menuSeparators = new Properties();
@@ -606,6 +606,7 @@ public class Menus {
 			addPlugInItem(pluginsMenu, "Why are Plugins Missing?", "ij.plugin.SimpleCommands(\"missing\")", 0, false);
 		}
 		installJarPlugins();
+		installDevelopmentPlugins();
 		installMacros();
 	}
 	
@@ -686,6 +687,30 @@ public class Menus {
 		return (String)instance.menuEntry2jarFile.get(menuEntry);
 	}
 
+	/** Install plugins found in the classpath. This method is principally
+	 * for development. It parallels installJarPlugins. */
+	void installDevelopmentPlugins() {
+        ClassLoader classLoader = IJ.getClassLoader();
+		java.net.URL pluginsConfigURL = classLoader.getResource("plugins.config");
+		File pluginsConfigFile = pluginsConfigURL != null ? new File(pluginsConfigURL.getPath()) : null;
+		if (pluginsConfigFile != null) {
+			InputStream is = null;
+			try {
+				is = new FileInputStream(pluginsConfigFile);
+			} catch (IOException e) {
+			}
+			if (is != null) {
+				ArrayList entries = getPluginEntries(is);
+				String pluginDirectory = pluginsConfigFile.getParent();
+				for (int j=0; j<entries.size(); j++) {
+					// pluginDirectory serves as the jar argument
+					// the jar argument is not used in any significant way as long as entries are well-formed
+					installJarPlugin(pluginDirectory, (String)entries.get(j));
+				}
+			}
+		}
+	}
+
 	/** Install plugins located in JAR files. */
 	void installJarPlugins() {
 		if (jarFiles==null)
@@ -695,28 +720,35 @@ public class Menus {
             isJarErrorHeading = false;
 			String jar = (String)jarFiles.elementAt(i);
 			InputStream is = getConfigurationFile(jar);
-            if (is==null) continue;
-            ArrayList entries = new ArrayList(20);
-            LineNumberReader lnr = new LineNumberReader(new InputStreamReader(is));
-            try {
-                while(true) {
-                    String s = lnr.readLine();
-                    if (s==null) break;
-					if (s.length()>=3 && !s.startsWith("#"))
-						entries.add(s);
-	            }
-            }
-            catch (IOException e) {}
-			finally {
-				try {if (lnr!=null) lnr.close();}
-				catch (IOException e) {}
-			}
+			ArrayList entries = getPluginEntries(is);
+			if (entries == null) continue;
 			for (int j=0; j<entries.size(); j++)
 				installJarPlugin(jar, (String)entries.get(j));
 		}		
 	}
-    
-    /** Install a plugin located in a JAR file. */
+
+	/** Refactored out of installJarPlugins() so that code could be shared with installDevelopmentPlugins() */
+	private ArrayList getPluginEntries(InputStream is) {
+		if (is==null) return null;
+		ArrayList entries = new ArrayList(20);
+		LineNumberReader lnr = new LineNumberReader(new InputStreamReader(is));
+		try {
+			while(true) {
+				String s = lnr.readLine();
+				if (s==null) break;
+				if (s.length()>=3 && !s.startsWith("#"))
+					entries.add(s);
+			}
+		}
+		catch (IOException e) {}
+		finally {
+			try {if (lnr!=null) lnr.close();}
+			catch (IOException e) {}
+		}
+		return entries;
+	}
+
+	/** Install a plugin located in a JAR file. */
 	void installJarPlugin(String jar, String s) {
 		addSorted = false;
 		Menu menu;
