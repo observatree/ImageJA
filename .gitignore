@@ -10,3 +10,5 @@ target
 # IntelliJ Idea
 ij.iml
 .idea
+# Shade
+dependency-reduced-pom.xml
