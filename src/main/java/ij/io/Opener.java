@@ -1224,7 +1224,7 @@ public class Opener {
 			return ZIP;
 
 		// FITS ("SIMP")
-		if ((b0==83 && b1==73 && b2==77 && b3==80) || name.endsWith(".fts.gz") || name.endsWith(".fits.gz") || name.endsWith(".fit.gz"))
+		if ((b0==83 && b1==73 && b2==77 && b3==80) || name.endsWith(".fts.gz") || name.endsWith(".fits.gz") || name.endsWith(".fit.gz") || name.endsWith(".fz"))
 			return FITS;
 			
 		// Java source file, text file or macro
