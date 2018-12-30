@@ -20,11 +20,6 @@
             <artifactId>nom-tam-fits</artifactId>
             <version>1.14.2</version>
         </dependency>
-        <dependency>
-            <groupId>gov.nasa.gsfc.heasarc</groupId>
-            <version>3.4.2</version>
-            <artifactId>skyview-geometry</artifactId>
-        </dependency>
     </dependencies>
 
     <build>

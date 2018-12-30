@@ -10,12 +10,9 @@ import ij.process.FloatProcessor;
 import ij.process.ImageProcessor;
 import nom.tam.fits.*;
 import nom.tam.image.compression.hdu.CompressedImageHDU;
-import skyview.data.CoordinateFormatter;
-import skyview.geometry.WCS;
+// import skyview.geometry.WCS; // Removed dependency on skyview.geometry.WCS
 
-import java.io.*;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.io.IOException;
 
 import static nom.tam.fits.header.InstrumentDescription.FILTER;
 import static nom.tam.fits.header.ObservationDescription.DEC;
@@ -25,7 +22,7 @@ import static nom.tam.fits.header.Standard.NAXIS;
 
 @SuppressWarnings("unused")
 public class FITS_Reader extends ImagePlus implements PlugIn {
-    private WCS wcs;
+    // private WCS wcs;
     private FileInfo fileInfo;
     private ImagePlus imagePlus;
     private FITSDecoder fitsDecoder;
@@ -42,7 +39,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
      * @param path path of FITS file
      */
     public void run(String path) {
-        wcs = null;
+        // wcs = null;
         imagePlus = null;
 
         /*
@@ -108,13 +105,14 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         show();
 
         IJ.showStatus("");
-        try {
-            writeTemporaryFITSFile(displayHdu);
-        } catch (FileNotFoundException e) {
-            IJ.error("File not found: " + e.getMessage());
-        } catch (FitsException e) {
-            IJ.error("This does not appear to be a FITS file: " + e.getMessage());
-        }
+        // writeTemporaryFITSFile on skyview.geometry.WCS, so bye-bye.
+        //        try {
+        //            writeTemporaryFITSFile(displayHdu);
+        //        } catch (FileNotFoundException e) {
+        //            IJ.error("File not found: " + e.getMessage());
+        //        } catch (FitsException e) {
+        //            IJ.error("This does not appear to be a FITS file: " + e.getMessage());
+        //        }
     }
 
     private boolean isCompressedFormat(BasicHDU[] basicHDU) {
@@ -155,23 +153,23 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         }
     }
 
-    private void writeTemporaryFITSFile(BasicHDU hdu) throws FileNotFoundException, FitsException {
-        File file = new File(IJ.getDirectory("home") + ".tmp.fits");
-        FileOutputStream fis = new FileOutputStream(file);
-        DataOutputStream dos = new DataOutputStream(fis);
-        fits.write(dos);
-        try {
-            wcs = new WCS(hdu.getHeader());
-        } catch (Exception e) {
-            Logger.getLogger(FITS_Reader.class.getName()).log(Level.SEVERE, null, e);
-        } finally {
-            try {
-                fis.close();
-            } catch (IOException ex) {
-                Logger.getLogger(FITS_Reader.class.getName()).log(Level.SEVERE, null, ex);
-            }
-        }
-    }
+    //    private void writeTemporaryFITSFile(BasicHDU hdu) throws FileNotFoundException, FitsException {
+    //        File file = new File(IJ.getDirectory("home") + ".tmp.fits");
+    //        FileOutputStream fis = new FileOutputStream(file);
+    //        DataOutputStream dos = new DataOutputStream(fis);
+    //        fits.write(dos);
+    //        try {
+    //            wcs = new WCS(hdu.getHeader());
+    //        } catch (Exception e) {
+    //            Logger.getLogger(FITS_Reader.class.getName()).log(Level.SEVERE, null, e);
+    //        } finally {
+    //            try {
+    //                fis.close();
+    //            } catch (IOException ex) {
+    //                Logger.getLogger(FITS_Reader.class.getName()).log(Level.SEVERE, null, ex);
+    //            }
+    //        }
+    //    }
 
     private ImageProcessor process3DimensionalImage(BasicHDU hdu, Data imgData)
             throws FitsException {
@@ -547,36 +545,38 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         }
     }
 
-    /**
-     * Gets the locationAsString attribute of the FITS object
-     *
-     * @param x Description of the Parameter
-     * @param y Description of the Parameter
-     * @return The locationAsString value
-     */
-    public String getLocationAsString(int x, int y) {
-        String s;
-        if (wcs != null) {
-            double[] in = new double[2];
-            in[0] = (double) (x);
-            in[1] = getProcessor().getHeight() - y - 1.0;
-            //in[2]=0.0;
-            double[] out = wcs.inverse().transform(in);
-            double[] coord = new double[2];
-            skyview.geometry.Util.coord(out, coord);
-            CoordinateFormatter cf = new CoordinateFormatter();
-            String[] ra = cf.sexagesimal(Math.toDegrees(coord[0]) / 15.0, 8).split(" ");
-            String[] dec = cf.sexagesimal(Math.toDegrees(coord[1]), 8).split(" ");
+    // The following code is nice, but it is causing a dependency on skyview.geometry.WCS, so bye-bye.
+    //    /**
+    //     * Gets the locationAsString attribute of the FITS object
+    //     *
+    //     * @param x Description of the Parameter
+    //     * @param y Description of the Parameter
+    //     * @return The locationAsString value
+    //     */
+    //    public String getLocationAsString(int x, int y) {
+    //        String s;
+    //        if (wcs != null) {
+    //            double[] in = new double[2];
+    //            in[0] = (double) (x);
+    //            in[1] = getProcessor().getHeight() - y - 1.0;
+    //            //in[2]=0.0;
+    //            double[] out = wcs.inverse().transform(in);
+    //            double[] coord = new double[2];
+    //            skyview.geometry.Util.coord(out, coord);
+    //            CoordinateFormatter cf = new CoordinateFormatter();
+    //            String[] ra = cf.sexagesimal(Math.toDegrees(coord[0]) / 15.0, 8).split(" ");
+    //            String[] dec = cf.sexagesimal(Math.toDegrees(coord[1]), 8).split(" ");
+    //
+    //            s = "x=" + x + ",y=" + y + " (RA=" + ra[0] + "h" + ra[1] + "m" + ra[2] + "s,  DEC="
+    //                    + dec[0] + "\u00b0" + " " + dec[1] + "' " + dec[2] + "\"" + ")";
+    //
+    //        } else {
+    //            s = "x=" + x + " y=" + y;
+    //        }
+    //        if (getStackSize() > 1) {
+    //            s += " z=" + (getCurrentSlice() - 1);
+    //        }
+    //        return s;
+    //    }
 
-            s = "x=" + x + ",y=" + y + " (RA=" + ra[0] + "h" + ra[1] + "m" + ra[2] + "s,  DEC="
-                    + dec[0] + "\u00b0" + " " + dec[1] + "' " + dec[2] + "\"" + ")";
-
-        } else {
-            s = "x=" + x + " y=" + y;
-        }
-        if (getStackSize() > 1) {
-            s += " z=" + (getCurrentSlice() - 1);
-        }
-        return s;
-    }
 }
