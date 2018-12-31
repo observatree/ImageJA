@@ -8,30 +8,28 @@ import ij.io.FileInfo;
 import ij.io.OpenDialog;
 import ij.process.FloatProcessor;
 import ij.process.ImageProcessor;
-import nom.tam.fits.*;
+import nom.tam.fits.BasicHDU;
+import nom.tam.fits.Data;
+import nom.tam.fits.Fits;
+import nom.tam.fits.FitsException;
+import nom.tam.fits.Header;
+import nom.tam.fits.HeaderCard;
+import nom.tam.fits.ImageHDU;
 import nom.tam.image.compression.hdu.CompressedImageHDU;
-// import skyview.geometry.WCS; // Removed dependency on skyview.geometry.WCS
+import nom.tam.util.Cursor;
 
-import java.io.IOException;
-
-import static nom.tam.fits.header.InstrumentDescription.FILTER;
-import static nom.tam.fits.header.ObservationDescription.DEC;
-import static nom.tam.fits.header.ObservationDescription.RA;
-import static nom.tam.fits.header.ObservationDurationDescription.EXPTIME;
 import static nom.tam.fits.header.Standard.NAXIS;
+import static nom.tam.fits.header.Standard.BITPIX;
 
 @SuppressWarnings("unused")
 public class FITS_Reader extends ImagePlus implements PlugIn {
     // private WCS wcs;
-    private FileInfo fileInfo;
     private ImagePlus imagePlus;
-    private FITSDecoder fitsDecoder;
+    private String directory;
     private String fileName;
-    private Fits fits;
     private int wi;
     private int he;
     private int de;
-    private String imageDescription;
 
     /**
      * Main processing method for the FITS_Reader object
@@ -62,6 +60,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         if (isCompressedFormat(hdus)) {
             int imageIndex = 1;
             try {
+                // A side effect of this call is that wi, he, and de are set
                 displayHdu = getCompressedImageData((CompressedImageHDU) hdus[imageIndex]);
             } catch (FitsException e) {
                 IJ.error("Failed to uncompress image: " + e.getMessage());
@@ -71,15 +70,32 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
             int imageIndex = 0;
             displayHdu = hdus[imageIndex];
             try {
+                // wi, he, and de are set
                 fixDimensions(displayHdu, displayHdu.getAxes().length);
             } catch (FitsException e) {
                 IJ.error("Failed to set image dimensions: " + e.getMessage());
+                return;
             }
+
         }
 
-        Data imgData = getImageData(displayHdu);
+        // Create the fileInfo.
+        FileInfo fileInfo;
+        try {
+            fileInfo = decodeFileInfo(displayHdu);
+        } catch (FitsException e) {
+            IJ.error("Failed to decode fileInfo: " + e.getMessage());
+            return;
+        }
 
-        buildImageDescriptionFromHeader(displayHdu);
+        // ImagePlus has a private member named fileInfo. This sets it.
+        if (fileInfo != null) {
+            setFileInfo(fileInfo);
+        }
+
+        setProperty("Info", getHeaderInfo(displayHdu));
+
+        Data imgData = getImageData(displayHdu);
 
         if ((wi < 0) || (he < 0)) {
             IJ.error("This does not appear to be a FITS file. " + wi + " " + he);
@@ -96,12 +112,8 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
             displayStackedImage();
         }
 
-        if (fitsDecoder != null) {
-            setProperty("Info", imageDescription + fitsDecoder.getHeaderInfo());
-        }
-        if (fileInfo != null) {
-            setFileInfo(fileInfo);
-        }
+
+
         show();
 
         IJ.showStatus("");
@@ -113,6 +125,58 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         //        } catch (FitsException e) {
         //            IJ.error("This does not appear to be a FITS file: " + e.getMessage());
         //        }
+    }
+
+    // Returns a newline-delimited concatenation of the header lines
+    private String getHeaderInfo(BasicHDU displayHdu) {
+        Header header = displayHdu.getHeader();
+        StringBuffer info = new StringBuffer();
+        Cursor<String, HeaderCard> iter = header.iterator();
+        while (iter.hasNext()) {
+            info.append(iter.next());
+            info.append('\n');
+        }
+        return info.toString();
+    }
+
+    // Possibly
+    // * bscale
+    // * bzero
+    // should be added as double properties to FileInfo
+    private FileInfo decodeFileInfo(BasicHDU displayHdu) throws FitsException {
+        Header header = displayHdu.getHeader();
+        FileInfo fi = new FileInfo();
+        fi.fileFormat = FileInfo.FITS;
+        fi.fileName = fileName;
+        fi.directory = directory;
+        fi.width = wi;
+        fi.height = he;
+        fi.nImages = de;
+        fi.pixelWidth = header.getDoubleValue("CDELT1");
+        fi.pixelHeight = header.getDoubleValue("CDELT2");
+        fi.pixelDepth = header.getDoubleValue("CDELT3");
+        fi.unit = header.getStringValue("CTYPE1");
+        int bitsPerPixel = header.getIntValue(BITPIX);
+        fi.fileType = fileTypeFromBitsPerPixel(bitsPerPixel);
+        fi.offset = (int)header.getOriginalSize(); // spec is allowing for a lot of headers!
+        return fi;
+    }
+
+    private int fileTypeFromBitsPerPixel(int bitsPerPixel) throws FitsException {
+        switch (bitsPerPixel) {
+            case 8:
+                return FileInfo.GRAY8;
+            case 16:
+                return FileInfo.GRAY16_SIGNED;
+            case 32:
+                return FileInfo.GRAY32_INT;
+            case -32:
+                return FileInfo.GRAY32_FLOAT;
+            case -64:
+                return FileInfo.GRAY64_FLOAT;
+            default:
+                throw new FitsException("BITPIX must be 8, 16, 32, -32 or -64, but BITPIX=" + bitsPerPixel);
+        }
     }
 
     private boolean isCompressedFormat(BasicHDU[] basicHDU) {
@@ -224,8 +288,6 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
             xValues[x] = xValues[x] / div;
         }
 
-        // TO-DO: The ij.gui.Plot constructor being used is deprecated!
-        @SuppressWarnings("deprecation")
         Plot P = new Plot(
                 "PlotWinTitle" + " " + fileName,
                 "X: " + unitX, "Y: " + unitY, xValues, yValues);
@@ -445,104 +507,33 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         return imgData;
     }
 
-    private void buildImageDescriptionFromHeader(BasicHDU hdu) {
-        imageDescription = "";
-        if (hdu.getObject() != null) {
-            imageDescription += "OBJECT: " + hdu.getObject() + "\n";
-        }
-        if (hdu.getTelescope() != null) {
-            imageDescription += "TELESCOP: " + hdu.getTelescope()
-                    + "\n";
-        }
-        if (hdu.getInstrument() != null) {
-            imageDescription += "INSTRUM: " + hdu.getInstrument()
-                    + "\n";
-        }
-        if (hdu.getHeader().getStringValue(FILTER) != null) {
-            imageDescription += "FILTER: " + hdu.getHeader()
-                    .getStringValue(FILTER) + "\n";
-        }
-        if (hdu.getObserver() != null) {
-            imageDescription +=
-                    "OBSERVER: " + hdu.getObserver() + "\n";
-        }
-        if (hdu.getHeader().getStringValue(EXPTIME) != null) {
-            imageDescription += "EXPTIME: " + hdu.getHeader()
-                    .getStringValue(EXPTIME) + "\n";
-        }
-        if (hdu.getObservationDate() != null) {
-            imageDescription +=
-                    "DATE-OBS: " + hdu.getObservationDate()
-                            + "\n";
-        }
-        if (hdu.getHeader().getStringValue("UT") != null) {
-            imageDescription += "UT: " + hdu.getHeader()
-                    .getStringValue("UT") + "\n";
-        }
-        if (hdu.getHeader().getStringValue("UTC") != null) {
-            imageDescription += "UT: " + hdu.getHeader()
-                    .getStringValue("UTC") + "\n";
-        }
-        if (hdu.getHeader().getStringValue(RA) != null) {
-            imageDescription += "RA: " + hdu.getHeader()
-                    .getStringValue(RA) + "\n";
-        }
-        if (hdu.getHeader().getStringValue(DEC) != null) {
-            imageDescription += "DEC: " + hdu.getHeader()
-                    .getStringValue(DEC) + "\n";
-        }
-        imageDescription += "\n" + "\n"
-                + "*************************************************************"
-                + "\n";
-
-        setProperty("Info", imageDescription + fitsDecoder.getHeaderInfo());
-
-    }
-
     private void fixDimensions(BasicHDU hdu, int dim) throws FitsException {
         //By oli
         // replace  hdu.getAxes()[dim - 1] by fi.width
         // and replace  hdu.getAxes()[dim - 2] by fi.height
         // or it would crash if it is not defined and go to the exception case at the end
-        if ((dim < 2) && (fileInfo != null)) {
-            wi = fileInfo.width;
-            he = fileInfo.height;
-            de = 1;
+        wi = hdu.getAxes()[dim - 1];
+        he = hdu.getAxes()[dim - 2];
+        if (dim > 2) {
+            de = hdu.getAxes()[dim - 3];
         } else {
-            wi = hdu.getAxes()[dim - 1];
-            he = hdu.getAxes()[dim - 2];
-            if (dim > 2) {
-                de = hdu.getAxes()[dim - 3];
-            } else {
-                de = 1;
-            }
+            de = 1;
         }
     }
 
     private BasicHDU[] getHDU(String path) throws FitsException {
         OpenDialog od = new OpenDialog("Open FITS...", path);
-        String directory = od.getDirectory();
+        directory = od.getDirectory();
         fileName = od.getFileName();
         if (fileName == null) {
             throw new FitsException("Null filename.");
         }
         IJ.showStatus("Opening: " + directory + fileName);
         IJ.log("Opening: " + directory + fileName);
-        fitsDecoder = new FITSDecoder(directory, fileName);
-        fileInfo = null;
-        try {
-            fileInfo = fitsDecoder.getInfo();
-        } catch (IOException e) {
-            throw new FitsException("Failed to create FITS decoder: " + e.getMessage());
-        }
 
-        fits = new Fits(directory + fileName);
+        Fits fits = new Fits(directory + fileName);
 
-        try {
-            return fits.read();
-        } catch (Exception e) {
-            throw new FitsException("Failed to read FITS file using nom.tam.fits: " + e.getMessage());
-        }
+        return fits.read();
     }
 
     // The following code is nice, but it is causing a dependency on skyview.geometry.WCS, so bye-bye.
