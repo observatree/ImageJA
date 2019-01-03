@@ -21,6 +21,7 @@ import nom.tam.util.Cursor;
 import static nom.tam.fits.header.Standard.NAXIS;
 import static nom.tam.fits.header.Standard.BITPIX;
 
+
 @SuppressWarnings("unused")
 public class FITS_Reader extends ImagePlus implements PlugIn {
     // private WCS wcs;
@@ -30,6 +31,8 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
     private int wi;
     private int he;
     private int de;
+
+    private interface TableWrapper { float valueAt(int x, int y); }
 
     /**
      * Main processing method for the FITS_Reader object
@@ -318,122 +321,35 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         ///////////////////////////// 16 BITS ///////////////////////
         if (hdu.getBitPix() == 16) {
             short[][] itab = (short[][]) imgData.getKernel();
-            int idx = 0;
-            float[] imgtab;
-            FloatProcessor imgtmp;
-            imgtmp = new FloatProcessor(wi, he);
-            imgtab = new float[wi * he];
-            for (int y = 0; y < he; y++) {
-                for (int x = 0; x < wi; x++) {
-                    imgtab[idx] = (float) hdu.getBZero()
-                            + (float) hdu.getBScale() * (float) itab[y][x];
-                    idx++;
-                }
-            }
-            imgtmp.setPixels(imgtab);
-            imgtmp.resetMinAndMax();
-
-            if (he == 1) {
-                imgtmp = (FloatProcessor) imgtmp.resize(wi, 100);
-            }
-            if (wi == 1) {
-                imgtmp = (FloatProcessor) imgtmp.resize(100, he);
-            }
-            ip = imgtmp;
-            ip.flipVertical();
-            this.setProcessor(fileName, ip);
+            float bZero = (float) hdu.getBZero();
+            float bScale = (float) hdu.getBScale();
+            TableWrapper wrapper = (x, y) -> itab[x][y];
+            ip = getImageProcessor(wrapper, bZero, bScale);
 
         } // 8 bits
         else if (hdu.getBitPix() == 8) {
+            // Only in the 8 case is the signed-to-unsigned correction done -- oversight?!?
             byte[][] itab = (byte[][]) imgData.getKernel();
-            int idx = 0;
-            float[] imgtab;
-            FloatProcessor imgtmp;
-            imgtmp = new FloatProcessor(wi, he);
-            imgtab = new float[wi * he];
-            for (int y = 0; y < he; y++) {
-                for (int x = 0; x < wi; x++) {
-                    if (itab[x][y] < 0) {
-                        itab[x][y] += 256;
-                    }
-                    imgtab[idx] = (float) hdu.getBZero()
-                            + (float) hdu.getBScale()
-                            * (float) (itab[y][x]);
-                    idx++;
-                }
-            }
-            imgtmp.setPixels(imgtab);
-            imgtmp.resetMinAndMax();
-
-            if (he == 1) {
-                imgtmp = (FloatProcessor) imgtmp.resize(wi, 100);
-            }
-            if (wi == 1) {
-                imgtmp = (FloatProcessor) imgtmp.resize(100, he);
-            }
-            ip = imgtmp;
-            ip.flipVertical();
-            this.setProcessor(fileName, ip);
-
+            float bZero = (float) hdu.getBZero();
+            float bScale = (float) hdu.getBScale();
+            TableWrapper wrapper = (x, y) -> (float)(itab[x][y] < 0 ? itab[x][y] + 256 : itab[x][y]);
+            ip = getImageProcessor(wrapper, bZero, bScale);
         } // 16-bits
         ///////////////// 32 BITS ///////////////////////
         else if (hdu.getBitPix() == 32) {
             int[][] itab = (int[][]) imgData.getKernel();
-            int idx = 0;
-            float[] imgtab;
-            FloatProcessor imgtmp;
-            imgtmp = new FloatProcessor(wi, he);
-            imgtab = new float[wi * he];
-            for (int y = 0; y < he; y++) {
-                for (int x = 0; x < wi; x++) {
-                    imgtab[idx] = (float) hdu.getBZero()
-                            + (float) hdu.getBScale() * (float) itab[y][x];
-                    idx++;
-                }
-            }
-            imgtmp.setPixels(imgtab);
-            imgtmp.resetMinAndMax();
-
-            if (he == 1) {
-                imgtmp = (FloatProcessor) imgtmp.resize(wi, 100);
-            }
-            if (wi == 1) {
-                imgtmp = (FloatProcessor) imgtmp.resize(100, he);
-            }
-
-            ip = imgtmp;
-            ip.flipVertical();
-            this.setProcessor(fileName, ip);
-
+            float bZero = (float) hdu.getBZero();
+            float bScale = (float) hdu.getBScale();
+            TableWrapper wrapper = (x, y) -> (float)itab[x][y];
+            ip = getImageProcessor(wrapper, bZero, bScale);
         } // 32 bits
         /////////////// -32 BITS ?? /////////////////////////////////
         else if (hdu.getBitPix() == -32) {
             float[][] itab = (float[][]) imgData.getKernel();
-            int idx = 0;
-            float[] imgtab;
-            FloatProcessor imgtmp;
-            imgtmp = new FloatProcessor(wi, he);
-            imgtab = new float[wi * he];
-            for (int y = 0; y < he; y++) {
-                for (int x = 0; x < wi; x++) {
-                    imgtab[idx] = (float) hdu.getBZero()
-                            + (float) hdu.getBScale() * itab[y][x];
-                    idx++;
-                }
-            }
-            imgtmp.setPixels(imgtab);
-            imgtmp.resetMinAndMax();
-
-            if (he == 1) {
-                imgtmp = (FloatProcessor) imgtmp.resize(wi, 100);
-            }
-            if (wi == 1) {
-                imgtmp = (FloatProcessor) imgtmp.resize(100, he);
-            }
-
-            ip = imgtmp;
-            ip.flipVertical();
-            this.setProcessor(fileName, ip);
+            float bZero = (float) hdu.getBZero();
+            float bScale = (float) hdu.getBScale();
+            TableWrapper wrapper = (x, y) -> (float)itab[x][y];
+            ip = getImageProcessor(wrapper, bZero, bScale);
 
             // special spectre optique transit
             if ((hdu.getHeader().getStringValue("STATUS") != null) && (hdu
@@ -484,8 +400,6 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
                     xValues[x] = xValues[x] * odiv;
                 }
 
-                // TO-DO: The ij.gui.Plot constructor being used is deprecated!
-                @SuppressWarnings("deprecation")
                 Plot P = new Plot(
                         "PlotWinTitle "
                                 + fileName, "X: " + unitX, "Y: " + unitY,
@@ -496,6 +410,34 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         else {
             ip = imagePlus.getProcessor();
         }
+        return ip;
+    }
+
+    private ImageProcessor getImageProcessor(TableWrapper wrapper, float bZero, float bScale) {
+        ImageProcessor ip;
+        int idx = 0;
+        float[] imgtab;
+        FloatProcessor imgtmp;
+        imgtmp = new FloatProcessor(wi, he);
+        imgtab = new float[wi * he];
+        for (int x = 0; x < wi; x++) {
+            for (int y = 0; y < he; y++) {
+                imgtab[idx] = bZero + bScale * wrapper.valueAt(x, y);
+                idx++;
+            }
+        }
+        imgtmp.setPixels(imgtab);
+        imgtmp.resetMinAndMax();
+
+        if (he == 1) {
+            imgtmp = (FloatProcessor) imgtmp.resize(wi, 100);
+        }
+        if (wi == 1) {
+            imgtmp = (FloatProcessor) imgtmp.resize(100, he);
+        }
+        ip = imgtmp;
+        ip.flipVertical();
+        this.setProcessor(fileName, ip);
         return ip;
     }
 
