@@ -31,7 +31,13 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
     private int wi;
     private int he;
     private int de;
+    private float bzero;
+    private float bscale;
 
+    // The image data comes in different types, but in the end, we turn them all into floats.
+    // So no matter what type the data is, we wrap it with a lambda that takes two indices and
+    // returns a float. A slicker approach would require Java to support primitive types as
+    // generics - which it does not.
     private interface TableWrapper { float valueAt(int x, int y); }
 
     /**
@@ -79,26 +85,23 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
                 IJ.error("Failed to set image dimensions: " + e.getMessage());
                 return;
             }
-
         }
+        bzero = (float) displayHdu.getBZero();
+        bscale = (float) displayHdu.getBScale();
 
         // Create the fileInfo.
-        FileInfo fileInfo;
         try {
-            fileInfo = decodeFileInfo(displayHdu);
+            FileInfo fileInfo = decodeFileInfo(displayHdu);
+            // ImagePlus has a private member named fileInfo. This inherited method sets it.
+            setFileInfo(fileInfo);
         } catch (FitsException e) {
             IJ.error("Failed to decode fileInfo: " + e.getMessage());
             return;
         }
 
-        // ImagePlus has a private member named fileInfo. This sets it.
-        if (fileInfo != null) {
-            setFileInfo(fileInfo);
-        }
-
         setProperty("Info", getHeaderInfo(displayHdu));
 
-        Data imgData = getImageData(displayHdu);
+        Data imgData = displayHdu.getData();
 
         if ((wi < 0) || (he < 0)) {
             IJ.error("This does not appear to be a FITS file. " + wi + " " + he);
@@ -115,19 +118,9 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
             displayStackedImage();
         }
 
-
-
         show();
 
         IJ.showStatus("");
-        // writeTemporaryFITSFile on skyview.geometry.WCS, so bye-bye.
-        //        try {
-        //            writeTemporaryFITSFile(displayHdu);
-        //        } catch (FileNotFoundException e) {
-        //            IJ.error("File not found: " + e.getMessage());
-        //        } catch (FitsException e) {
-        //            IJ.error("This does not appear to be a FITS file: " + e.getMessage());
-        //        }
     }
 
     // Returns a newline-delimited concatenation of the header lines
@@ -142,10 +135,6 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         return info.toString();
     }
 
-    // Possibly
-    // * bscale
-    // * bzero
-    // should be added as double properties to FileInfo
     private FileInfo decodeFileInfo(BasicHDU displayHdu) throws FitsException {
         Header header = displayHdu.getHeader();
         FileInfo fi = new FileInfo();
@@ -161,7 +150,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         fi.unit = header.getStringValue("CTYPE1");
         int bitsPerPixel = header.getIntValue(BITPIX);
         fi.fileType = fileTypeFromBitsPerPixel(bitsPerPixel);
-        fi.offset = (int)header.getOriginalSize(); // spec is allowing for a lot of headers!
+        fi.offset = (int)header.getOriginalSize(); // downcast because spec is allowing for a lot of headers!
         return fi;
     }
 
@@ -190,6 +179,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         wi = hdu.getHeader().getIntValue("ZNAXIS1");
         he = hdu.getHeader().getIntValue("ZNAXIS2");
         de = 1;
+
         return hdu.asImageHDU();
     }
 
@@ -220,60 +210,22 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         }
     }
 
-    //    private void writeTemporaryFITSFile(BasicHDU hdu) throws FileNotFoundException, FitsException {
-    //        File file = new File(IJ.getDirectory("home") + ".tmp.fits");
-    //        FileOutputStream fis = new FileOutputStream(file);
-    //        DataOutputStream dos = new DataOutputStream(fis);
-    //        fits.write(dos);
-    //        try {
-    //            wcs = new WCS(hdu.getHeader());
-    //        } catch (Exception e) {
-    //            Logger.getLogger(FITS_Reader.class.getName()).log(Level.SEVERE, null, e);
-    //        } finally {
-    //            try {
-    //                fis.close();
-    //            } catch (IOException ex) {
-    //                Logger.getLogger(FITS_Reader.class.getName()).log(Level.SEVERE, null, ex);
-    //            }
-    //        }
-    //    }
-
     private ImageProcessor process3DimensionalImage(BasicHDU hdu, Data imgData)
             throws FitsException {
-        ImageProcessor ip;
         short[][][] itab = (short[][][]) imgData.getKernel();
         float[] xValues = new float[wi];
         float[] yValues = new float[wi];
 
         for (int y = 0; y < wi; y++) {
-            yValues[y] = (float) hdu.getBZero()
-                    + (float) hdu.getBScale() * itab[0][0][y];
+            yValues[y] = bzero + bscale * itab[0][0][y];
         }
 
-        String unitY;
-        unitY = "IntensityRS ";
-        String unitX;
-        unitX = "FrequencyRS ";
-        float CRVAL1 = 0;
-        float CRPIX1 = 0;
-        float CDELT1 = 0;
-        if (hdu.getHeader().getStringValue("CRVAL1") != null) {
-            CRVAL1 = Float
-                    .parseFloat(hdu.getHeader().getStringValue("CRVAL1"));
-        }
-        if (hdu.getHeader().getStringValue("CRPIX1") != null) {
-            CRPIX1 = Float
-                    .parseFloat(hdu.getHeader().getStringValue("CRPIX1"));
-        }
-        if (hdu.getHeader().getStringValue("CDELT1") != null) {
-            CDELT1 = Float
-                    .parseFloat(hdu.getHeader().getStringValue("CDELT1"));
-        }
-        for (int x = 0; x < wi; x++) {
-            xValues[x] = CRVAL1 + (x - CRPIX1) * CDELT1;
-        }
-
+        String unitY = "IntensityRS ";
+        String unitX = "FrequencyRS ";
+        float CRPIX1 = getCRPIX1(hdu);
+        float CDELT1 = getCDELT1(hdu);
         int div = 1;
+        float CRVAL1 = getCRVAL1ProcessX(hdu, xValues, CRPIX1, CDELT1);
         if (CRVAL1 > 2000000000) {
             div = 1000000000;
             unitX += "(Ghz)";
@@ -291,65 +243,54 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
             xValues[x] = xValues[x] / div;
         }
 
-        Plot P = new Plot(
+        @SuppressWarnings("deprecation") Plot P = new Plot(
                 "PlotWinTitle" + " " + fileName,
                 "X: " + unitX, "Y: " + unitY, xValues, yValues);
         P.draw();
 
         FloatProcessor imgtmp;
         imgtmp = new FloatProcessor(wi, he);
-        imgtmp.setPixels(yValues);
-        imgtmp.resetMinAndMax();
-
-        if (he == 1) {
-            imgtmp = (FloatProcessor) imgtmp.resize(wi, 100);
-        }
-        if (wi == 1) {
-            imgtmp = (FloatProcessor) imgtmp.resize(100, he);
-        }
-
-        ip = imgtmp;
-
-        ip.flipVertical();
+        ImageProcessor ip = getImageProcessor2(yValues, imgtmp);
         setProcessor(fileName, ip);
         return ip;
     }
 
+    private float getCDELT1(BasicHDU hdu) {
+        float CDELT1 = 0;
+        if (hdu.getHeader().getStringValue("CDELT1") != null) {
+            CDELT1 = Float
+                    .parseFloat(hdu.getHeader().getStringValue("CDELT1"));
+        }
+        return CDELT1;
+    }
+
     private ImageProcessor process2DimensionalImage(BasicHDU hdu, Data imgData)
             throws FitsException {
-        ImageProcessor ip;//Profiler p = new Profiler();
+        ImageProcessor ip;
         ///////////////////////////// 16 BITS ///////////////////////
         if (hdu.getBitPix() == 16) {
             short[][] itab = (short[][]) imgData.getKernel();
-            float bZero = (float) hdu.getBZero();
-            float bScale = (float) hdu.getBScale();
             TableWrapper wrapper = (x, y) -> itab[x][y];
-            ip = getImageProcessor(wrapper, bZero, bScale);
+            ip = getImageProcessor(wrapper);
 
         } // 8 bits
         else if (hdu.getBitPix() == 8) {
             // Only in the 8 case is the signed-to-unsigned correction done -- oversight?!?
             byte[][] itab = (byte[][]) imgData.getKernel();
-            float bZero = (float) hdu.getBZero();
-            float bScale = (float) hdu.getBScale();
             TableWrapper wrapper = (x, y) -> (float)(itab[x][y] < 0 ? itab[x][y] + 256 : itab[x][y]);
-            ip = getImageProcessor(wrapper, bZero, bScale);
+            ip = getImageProcessor(wrapper);
         } // 16-bits
         ///////////////// 32 BITS ///////////////////////
         else if (hdu.getBitPix() == 32) {
             int[][] itab = (int[][]) imgData.getKernel();
-            float bZero = (float) hdu.getBZero();
-            float bScale = (float) hdu.getBScale();
             TableWrapper wrapper = (x, y) -> (float)itab[x][y];
-            ip = getImageProcessor(wrapper, bZero, bScale);
+            ip = getImageProcessor(wrapper);
         } // 32 bits
         /////////////// -32 BITS ?? /////////////////////////////////
         else if (hdu.getBitPix() == -32) {
             float[][] itab = (float[][]) imgData.getKernel();
-            float bZero = (float) hdu.getBZero();
-            float bScale = (float) hdu.getBScale();
             TableWrapper wrapper = (x, y) -> (float)itab[x][y];
-            ip = getImageProcessor(wrapper, bZero, bScale);
+            ip = getImageProcessor(wrapper);
 
             // special spectre optique transit
             if ((hdu.getHeader().getStringValue("STATUS") != null) && (hdu
@@ -365,30 +306,12 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
                         yValues[y] = 0;
                     }
                 }
-                String unitY;
-                unitY = "IntensityRS ";
-                String unitX;
-                unitX = "WavelengthRS ";
-                float CRVAL1 = 0;
-                float CRPIX1 = 0;
-                float CDELT1 = 0;
-                if (hdu.getHeader().getStringValue("CRVAL1") != null) {
-                    CRVAL1 = Float.parseFloat(
-                            hdu.getHeader().getStringValue("CRVAL1"));
-                }
-                if (hdu.getHeader().getStringValue("CRPIX1") != null) {
-                    CRPIX1 = Float.parseFloat(
-                            hdu.getHeader().getStringValue("CRPIX1"));
-                }
-                if (hdu.getHeader().getStringValue("CDELT1") != null) {
-                    CDELT1 = Float.parseFloat(
-                            hdu.getHeader().getStringValue("CDELT1"));
-                }
-                for (int x = 0; x < wi; x++) {
-                    xValues[x] = CRVAL1 + (x - CRPIX1) * CDELT1;
-                }
-
+                String unitY = "IntensityRS ";
+                String unitX = "WavelengthRS ";
+                float CRPIX1 = getCRPIX1(hdu);
+                float CDELT1 = getCDELT1(hdu);
                 float odiv = 1;
+                float CRVAL1 = getCRVAL1ProcessX(hdu, xValues, CRPIX1, CDELT1);
                 if (CRVAL1 < 0.000001) {
                     odiv = 1000000;
                     unitX += "(" + "\u00B5" + "m)";
@@ -400,7 +323,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
                     xValues[x] = xValues[x] * odiv;
                 }
 
-                Plot P = new Plot(
+                @SuppressWarnings("deprecation") Plot P = new Plot(
                         "PlotWinTitle "
                                 + fileName, "X: " + unitX, "Y: " + unitY,
                         xValues, yValues);
@@ -413,7 +336,28 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         return ip;
     }
 
-    private ImageProcessor getImageProcessor(TableWrapper wrapper, float bZero, float bScale) {
+    private float getCRPIX1(BasicHDU hdu) {
+        float CRPIX1 = 0;
+        if (hdu.getHeader().getStringValue("CRPIX1") != null) {
+            CRPIX1 = Float.parseFloat(
+                    hdu.getHeader().getStringValue("CRPIX1"));
+        }
+        return CRPIX1;
+    }
+
+    private float getCRVAL1ProcessX(BasicHDU hdu, float[] xValues, float CRPIX1, float CDELT1) {
+        float CRVAL1 = 0;
+        if (hdu.getHeader().getStringValue("CRVAL1") != null) {
+            CRVAL1 = Float
+                    .parseFloat(hdu.getHeader().getStringValue("CRVAL1"));
+        }
+        for (int x = 0; x < wi; x++) {
+            xValues[x] = CRVAL1 + (x - CRPIX1) * CDELT1;
+        }
+        return CRVAL1;
+    }
+
+    private ImageProcessor getImageProcessor(TableWrapper wrapper) {
         ImageProcessor ip;
         int idx = 0;
         float[] imgtab;
@@ -422,10 +366,17 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         imgtab = new float[wi * he];
         for (int x = 0; x < wi; x++) {
             for (int y = 0; y < he; y++) {
-                imgtab[idx] = bZero + bScale * wrapper.valueAt(x, y);
+                imgtab[idx] = bzero + bscale * wrapper.valueAt(x, y);
                 idx++;
             }
         }
+        ip = getImageProcessor2(imgtab, imgtmp);
+        this.setProcessor(fileName, ip);
+        return ip;
+    }
+
+    private ImageProcessor getImageProcessor2(float[] imgtab, FloatProcessor imgtmp) {
+        ImageProcessor ip;
         imgtmp.setPixels(imgtab);
         imgtmp.resetMinAndMax();
 
@@ -437,23 +388,10 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         }
         ip = imgtmp;
         ip.flipVertical();
-        this.setProcessor(fileName, ip);
         return ip;
     }
 
-    private Data getImageData(BasicHDU hdu) {
-        Data imgData = null;
-        if (hdu.getData() != null) {
-            imgData = hdu.getData();
-        }
-        return imgData;
-    }
-
     private void fixDimensions(BasicHDU hdu, int dim) throws FitsException {
-        //By oli
-        // replace  hdu.getAxes()[dim - 1] by fi.width
-        // and replace  hdu.getAxes()[dim - 2] by fi.height
-        // or it would crash if it is not defined and go to the exception case at the end
         wi = hdu.getAxes()[dim - 1];
         he = hdu.getAxes()[dim - 2];
         if (dim > 2) {
@@ -479,6 +417,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
     }
 
     // The following code is nice, but it is causing a dependency on skyview.geometry.WCS, so bye-bye.
+    //
     //    /**
     //     * Gets the locationAsString attribute of the FITS object
     //     *
@@ -510,6 +449,27 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
     //            s += " z=" + (getCurrentSlice() - 1);
     //        }
     //        return s;
+    //    }
+
+    // This code also has a dependency on skyview.geometry.WCS. Why did we need to write a temporary FITS
+    // file anyway? writeTemporaryFITSFile(displayHdu) the last thing done in run().
+    //
+    //    private void writeTemporaryFITSFile(BasicHDU hdu) throws FileNotFoundException, FitsException {
+    //        File file = new File(IJ.getDirectory("home") + ".tmp.fits");
+    //        FileOutputStream fis = new FileOutputStream(file);
+    //        DataOutputStream dos = new DataOutputStream(fis);
+    //        fits.write(dos);
+    //        try {
+    //            wcs = new WCS(hdu.getHeader());
+    //        } catch (Exception e) {
+    //            Logger.getLogger(FITS_Reader.class.getName()).log(Level.SEVERE, null, e);
+    //        } finally {
+    //            try {
+    //                fis.close();
+    //            } catch (IOException ex) {
+    //                Logger.getLogger(FITS_Reader.class.getName()).log(Level.SEVERE, null, ex);
+    //            }
+    //        }
     //    }
 
 }
