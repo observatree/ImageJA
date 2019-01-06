@@ -36,8 +36,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
 
     // The image data comes in different types, but in the end, we turn them all into floats.
     // So no matter what type the data is, we wrap it with a lambda that takes two indices and
-    // returns a float. A slicker approach would require Java to support primitive types as
-    // generics - which it does not.
+    // returns a float.
     private interface TableWrapper { float valueAt(int x, int y); }
 
     /**
@@ -270,26 +269,26 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         ///////////////////////////// 16 BITS ///////////////////////
         if (hdu.getBitPix() == 16) {
             short[][] itab = (short[][]) imgData.getKernel();
-            TableWrapper wrapper = (x, y) -> itab[x][y];
+            TableWrapper wrapper = (x, y) -> itab[y][x];
             ip = getImageProcessor(wrapper);
 
         } // 8 bits
         else if (hdu.getBitPix() == 8) {
             // Only in the 8 case is the signed-to-unsigned correction done -- oversight?!?
             byte[][] itab = (byte[][]) imgData.getKernel();
-            TableWrapper wrapper = (x, y) -> (float)(itab[x][y] < 0 ? itab[x][y] + 256 : itab[x][y]);
+            TableWrapper wrapper = (x, y) -> (float)(itab[y][x] < 0 ? itab[y][x] + 256 : itab[y][x]);
             ip = getImageProcessor(wrapper);
         } // 16-bits
         ///////////////// 32 BITS ///////////////////////
         else if (hdu.getBitPix() == 32) {
             int[][] itab = (int[][]) imgData.getKernel();
-            TableWrapper wrapper = (x, y) -> (float)itab[x][y];
+            TableWrapper wrapper = (x, y) -> (float)itab[y][x];
             ip = getImageProcessor(wrapper);
         } // 32 bits
         /////////////// -32 BITS ?? /////////////////////////////////
         else if (hdu.getBitPix() == -32) {
             float[][] itab = (float[][]) imgData.getKernel();
-            TableWrapper wrapper = (x, y) -> (float)itab[x][y];
+            TableWrapper wrapper = (x, y) -> (float)itab[y][x];
             ip = getImageProcessor(wrapper);
 
             // special spectre optique transit
@@ -357,6 +356,25 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         return CRVAL1;
     }
 
+    // The following code excerpted from ij.process.FloatProcessor serves to document the layout
+    // of the float[] that is called imgtab in getImageProcessor[]:
+    //
+    //    for (int y=0; y<height; y++) {
+    //        for (int x=0; x<width; x++) {
+    //            pixels[i++] = array[x][y];
+    //        }
+    //    }
+    //
+    // As one can see, x is in the tighter inner loop. y is in the outer loop.
+    // This is a bit backwards to what might be expected. In any case, it tells us
+    // that x must be the inner loop when we construct imgtab below.
+
+    // Examine how our TableWrapper lambda is implemented:
+    //
+    //    TableWrapper wrapper = (x, y) -> itab[y][x];
+    //
+    // Notice that again, the x index is the tighter loop.
+
     private ImageProcessor getImageProcessor(TableWrapper wrapper) {
         ImageProcessor ip;
         int idx = 0;
@@ -364,8 +382,8 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         FloatProcessor imgtmp;
         imgtmp = new FloatProcessor(wi, he);
         imgtab = new float[wi * he];
-        for (int x = 0; x < wi; x++) {
-            for (int y = 0; y < he; y++) {
+        for (int y = 0; y < he; y++) {
+            for (int x = 0; x < wi; x++) {
                 imgtab[idx] = bzero + bscale * wrapper.valueAt(x, y);
                 idx++;
             }
