@@ -101,13 +101,6 @@ FocusListener, ItemListener, KeyListener, AdjustmentListener, WindowListener {
 	private static Frame getParentFrame() {
 		Frame parent = WindowManager.getCurrentImage()!=null?
 			(Frame)WindowManager.getCurrentImage().getWindow():IJ.getInstance()!=null?IJ.getInstance():new Frame();
-		if (IJ.isMacOSX() && IJ.isJava18()) {
-			ImageJ ij = IJ.getInstance();
-			if (ij!=null && ij.isActive())
-				parent = ij;
-			else
-				parent = null;
-		}
 		return parent;
 	}
 
