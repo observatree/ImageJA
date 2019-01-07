@@ -1,10 +1,12 @@
 // Default startup macros
 
-  macro "Command Finder Built-in Tool" {}
-  macro "Developer Menu Built-in Tool" {}
-  macro "Brush Built-in Tool" {}
-  macro "Flood Filler Built-in Tool" {}
-  macro "Arrow Built-in Tool" {}
+// None of the following five tools were present in the 3.x versions of AstroImageJ.
+//
+//  macro "Command Finder Built-in Tool" {}
+//  macro "Developer Menu Built-in Tool" {}
+//  macro "Brush Built-in Tool" {}
+//  macro "Flood Filler Built-in Tool" {}
+//  macro "Arrow Built-in Tool" {}
 
 
 // "StartupMacros"
@@ -158,7 +160,10 @@ run("Coordinate Converter");
       run("Color Picker...");
   }
 
-  macro "-" {} //menu divider
+
+// No menu dividers were present in the 3.x versions of AstroImageJ.
+//
+// macro "-" {} // menu divider
 
   macro "About Startup Macros..." {
       path = getDirectory("macros")+"/About Startup Macros";
