@@ -117,8 +117,6 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
             displayStackedImage();
         }
 
-        show();
-
         IJ.showStatus("");
     }
 
