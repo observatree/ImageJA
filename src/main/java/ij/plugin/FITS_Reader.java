@@ -123,7 +123,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
     // Returns a newline-delimited concatenation of the header lines
     private String getHeaderInfo(BasicHDU displayHdu) {
         Header header = displayHdu.getHeader();
-        StringBuffer info = new StringBuffer();
+        StringBuilder info = new StringBuilder();
         Cursor<String, HeaderCard> iter = header.iterator();
         while (iter.hasNext()) {
             info.append(iter.next());
@@ -373,6 +373,8 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
     //
     // Notice that again, the x index is the tighter loop.
 
+    // Return instance of subclass of ImageProcessor: ByteProcessor, ColorProcessor, ShortProcessor, or FloatProcessor.
+    // https://github.com/observatree/imagej-ImageJA/blob/master/src/main/java/ij/ImagePlus.java#L619
     private ImageProcessor getImageProcessor(TableWrapper wrapper) {
         ImageProcessor ip;
         int idx = 0;
@@ -391,20 +393,18 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         return ip;
     }
 
-    private ImageProcessor getImageProcessor2(float[] imgtab, FloatProcessor imgtmp) {
-        ImageProcessor ip;
+    private ImageProcessor getImageProcessor2(float[] imgtab, ImageProcessor imgtmp) {
         imgtmp.setPixels(imgtab);
         imgtmp.resetMinAndMax();
 
         if (he == 1) {
-            imgtmp = (FloatProcessor) imgtmp.resize(wi, 100);
+            imgtmp = imgtmp.resize(wi, 100);
         }
         if (wi == 1) {
-            imgtmp = (FloatProcessor) imgtmp.resize(100, he);
+            imgtmp = imgtmp.resize(100, he);
         }
-        ip = imgtmp;
-        ip.flipVertical();
-        return ip;
+        imgtmp.flipVertical();
+        return imgtmp;
     }
 
     private void fixDimensions(BasicHDU hdu, int dim) throws FitsException {
