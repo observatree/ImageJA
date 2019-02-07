@@ -6,6 +6,8 @@ import ij.ImageStack;
 import ij.gui.Plot;
 import ij.io.FileInfo;
 import ij.io.OpenDialog;
+import ij.process.ShortProcessor;
+import ij.process.ByteProcessor;
 import ij.process.FloatProcessor;
 import ij.process.ImageProcessor;
 import nom.tam.fits.BasicHDU;
@@ -151,6 +153,26 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         return fi;
     }
 
+    // The pre-nom.tam.fits FITS_Reader -- for convenience, here is a web link to that
+    // https://github.com/observatree/imagej-ImageJA/blob/master/src/main/java/ij/plugin/FITS_Reader.java --
+    // claimed to process all of the following formats:
+    //            case 8:
+    //                return FileInfo.GRAY8;
+    //            case 16:
+    //                return FileInfo.GRAY16_SIGNED;
+    //            case 32:
+    //                return FileInfo.GRAY32_INT;
+    //            case -32:
+    //                return FileInfo.GRAY32_FLOAT;
+    //            case -64:
+    //                return FileInfo.GRAY64_FLOAT;
+    // BinaryProcessor, ByteProcessor, ShortProcessor, ColorProcessor, and FloatProcessor
+    // are the only subclasses of ImageProcessor available to do the actual processing. Of these, only ByteProcessor,
+    // ShortProcessor, and FloatProcessor are relevant for the above cases. Therefore,
+    // GRAY8, GRAY16_SIGNED and GRAY32_FLOAT look to be the only formats that were directly supported.
+    // Cameras do not typically read out signed values, even in the 16-bit case. A common problem in interpreting
+    // readouts as signed is that values greater than 32,767 do in fact occur and at later stages in processing,
+    // 65,536 has to be added to correct them. Java contributes to this problem by not having unsigned integer types.
     private int fileTypeFromBitsPerPixel(int bitsPerPixel) throws FitsException {
         switch (bitsPerPixel) {
             case 8:
@@ -247,7 +269,8 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
 
         FloatProcessor imgtmp;
         imgtmp = new FloatProcessor(wi, he);
-        ImageProcessor ip = getImageProcessor2(yValues, imgtmp);
+        imgtmp.setPixels(yValues);
+        ImageProcessor ip = getImageProcessor2(imgtmp);
         setProcessor(fileName, ip);
         return ip;
     }
@@ -261,33 +284,72 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         return CDELT1;
     }
 
+    // The following code excerpted from ij.process.FloatProcessor serves to document the layout
+    // of the float[] that is called imgtab in getImageProcessor[]:
+    //
+    //    for (int y=0; y<height; y++) {
+    //        for (int x=0; x<width; x++) {
+    //            pixels[i++] = array[x][y];
+    //        }
+    //    }
+    //
+    // As one can see, x is in the tighter inner loop. y is in the outer loop.
+    // This is a bit backwards to what might be expected. In any case, it tells us
+    // that x must be the inner loop when we construct imgtab below.
+
     private ImageProcessor process2DimensionalImage(BasicHDU hdu, Data imgData)
             throws FitsException {
         ImageProcessor ip;
-        ///////////////////////////// 16 BITS ///////////////////////
-        if (hdu.getBitPix() == 16) {
+        if (hdu.getBitPix() == 16) { // 16 BITS (GRAY16_SIGNED)
             short[][] itab = (short[][]) imgData.getKernel();
-            TableWrapper wrapper = (x, y) -> itab[y][x];
-            ip = getImageProcessor(wrapper);
-
-        } // 8 bits
-        else if (hdu.getBitPix() == 8) {
-            // Only in the 8 case is the signed-to-unsigned correction done -- oversight?!?
+            int idx = 0;
+            short[] imgtab;
+            ShortProcessor imgtmp;
+            imgtmp = new ShortProcessor(wi, he);
+            imgtab = new short[wi * he];
+            for (int y = 0; y < he; y++) {
+                for (int x = 0; x < wi; x++) {
+                    // The addition of 65536 illustrates intent, but is useless. Java's shorts are signed.
+                    imgtab[idx] = (short)((short)bzero + (short)bscale * (short)(itab[y][x] < 0 ? itab[y][x] + 65536 : itab[y][x]));
+                    idx++;
+                }
+            }
+            imgtmp.setPixels(imgtab);
+            ip = getImageProcessor2(imgtmp);
+            this.setProcessor(fileName, ip);
+        } else if (hdu.getBitPix() == 8) { // 8 BITS (GRAY8)
             byte[][] itab = (byte[][]) imgData.getKernel();
-            TableWrapper wrapper = (x, y) -> (float)(itab[y][x] < 0 ? itab[y][x] + 256 : itab[y][x]);
-            ip = getImageProcessor(wrapper);
-        } // 16-bits
-        ///////////////// 32 BITS ///////////////////////
-        else if (hdu.getBitPix() == 32) {
-            int[][] itab = (int[][]) imgData.getKernel();
-            TableWrapper wrapper = (x, y) -> (float)itab[y][x];
-            ip = getImageProcessor(wrapper);
-        } // 32 bits
-        /////////////// -32 BITS ?? /////////////////////////////////
-        else if (hdu.getBitPix() == -32) {
+            int idx = 0;
+            byte[] imgtab;
+            ByteProcessor imgtmp;
+            imgtmp = new ByteProcessor(wi, he);
+            imgtab = new byte[wi * he];
+            for (int y = 0; y < he; y++) {
+                for (int x = 0; x < wi; x++) {
+                    // The addition of 256 illustrates intent, but is useless. Java's bytes are signed.
+                    imgtab[idx] = (byte)((byte)bzero + (byte)bscale * (byte)(itab[y][x] < 0 ? itab[y][x] + 256 : itab[y][x]));
+                    idx++;
+                }
+            }
+            imgtmp.setPixels(imgtab);
+            ip = getImageProcessor2(imgtmp);
+            this.setProcessor(fileName, ip);
+        } else if (hdu.getBitPix() == -32) { // -32 BITS (GRAY32_FLOAT)
             float[][] itab = (float[][]) imgData.getKernel();
-            TableWrapper wrapper = (x, y) -> (float)itab[y][x];
-            ip = getImageProcessor(wrapper);
+            int idx = 0;
+            float[] imgtab;
+            FloatProcessor imgtmp;
+            imgtmp = new FloatProcessor(wi, he);
+            imgtab = new float[wi * he];
+            for (int y = 0; y < he; y++) {
+                for (int x = 0; x < wi; x++) {
+                    imgtab[idx] = bzero + bscale * itab[y][x];
+                    idx++;
+                }
+            }
+            imgtmp.setPixels(imgtab);
+            ip = getImageProcessor2(imgtmp);
+            this.setProcessor(fileName, ip);
 
             // special spectre optique transit
             if ((hdu.getHeader().getStringValue("STATUS") != null) && (hdu
@@ -354,47 +416,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
         return CRVAL1;
     }
 
-    // The following code excerpted from ij.process.FloatProcessor serves to document the layout
-    // of the float[] that is called imgtab in getImageProcessor[]:
-    //
-    //    for (int y=0; y<height; y++) {
-    //        for (int x=0; x<width; x++) {
-    //            pixels[i++] = array[x][y];
-    //        }
-    //    }
-    //
-    // As one can see, x is in the tighter inner loop. y is in the outer loop.
-    // This is a bit backwards to what might be expected. In any case, it tells us
-    // that x must be the inner loop when we construct imgtab below.
-
-    // Examine how our TableWrapper lambda is implemented:
-    //
-    //    TableWrapper wrapper = (x, y) -> itab[y][x];
-    //
-    // Notice that again, the x index is the tighter loop.
-
-    // Return instance of subclass of ImageProcessor: ByteProcessor, ColorProcessor, ShortProcessor, or FloatProcessor.
-    // https://github.com/observatree/imagej-ImageJA/blob/master/src/main/java/ij/ImagePlus.java#L619
-    private ImageProcessor getImageProcessor(TableWrapper wrapper) {
-        ImageProcessor ip;
-        int idx = 0;
-        float[] imgtab;
-        FloatProcessor imgtmp;
-        imgtmp = new FloatProcessor(wi, he);
-        imgtab = new float[wi * he];
-        for (int y = 0; y < he; y++) {
-            for (int x = 0; x < wi; x++) {
-                imgtab[idx] = bzero + bscale * wrapper.valueAt(x, y);
-                idx++;
-            }
-        }
-        ip = getImageProcessor2(imgtab, imgtmp);
-        this.setProcessor(fileName, ip);
-        return ip;
-    }
-
-    private ImageProcessor getImageProcessor2(float[] imgtab, ImageProcessor imgtmp) {
-        imgtmp.setPixels(imgtab);
+    private ImageProcessor getImageProcessor2(ImageProcessor imgtmp) {
         imgtmp.resetMinAndMax();
 
         if (he == 1) {
