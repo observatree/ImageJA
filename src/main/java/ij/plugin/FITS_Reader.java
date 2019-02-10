@@ -108,6 +108,7 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
             IJ.error("This does not appear to be a FITS file. " + wi + " " + he);
             return;
         }
+
         if (de == 1) {
             try {
                 displaySingleImage(displayHdu, imgData);
@@ -204,6 +205,14 @@ public class FITS_Reader extends ImagePlus implements PlugIn {
 
     private void displayStackedImage() {
         ImageStack stack = imagePlus.getStack();
+        // The above statement is generating a NullPointerException
+        // because imagePlus is null. The reason imagePlus is needed
+        // is to get its stack and the associated processor below. The logic for
+        // getting a processor resides in process2DimensionalImage(). One
+        // approach would be to extract that logic into a separate method
+        // so that it can be re-used here. Since FITS_Reader is a subclass
+        // of ImagePlus, it actually seems pretty bizarre that it also
+        // has an ImagePlus instance as a member.
         for (int i = 1; i <= stack.getSize(); i++) {
             stack.getProcessor(i).flipVertical();
         }
